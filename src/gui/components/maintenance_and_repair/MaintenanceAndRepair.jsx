@@ -1,10 +1,11 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useCallback, useEffect } from 'react';
 import { useProjectData } from '../../../contexts/ProjectDataContext';
+import { normalizeMaintenanceData, validateMaintenanceData } from '../../../utils/projectPageSchema';
 import '../financialdata/FinancialData.css';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const BASE_DOCS_URL = 'https://yourdocs.com/maintenance/';
 
 const MAINTENANCE_SECTIONS = [
     {
@@ -143,7 +144,7 @@ const MAINTENANCE_SECTIONS = [
             {
                 key: 'major_repair_duration',
                 label: 'Major Repair Duration',
-                hint: 'Duration of major repair works.',
+                hint: 'Duration of major repair works, in months.',
                 type: 'int',
                 min: 0,
                 max: 60,
@@ -184,7 +185,7 @@ const MAINTENANCE_SECTIONS = [
             {
                 key: 'bearing_exp_joint_duration',
                 label: 'Bearing & Expansion Joint Replacement Duration',
-                hint: 'Duration of bearing and expansion joint replacement works.',
+                hint: 'Duration of bearing and expansion joint replacement works, in days.',
                 type: 'int',
                 min: 0,
                 max: 365,
@@ -235,22 +236,10 @@ function SectionHeader({ title }) {
     );
 }
 
-function FieldHint({ text, docSlug }) {
+function FieldHint({ text }) {
     return (
         <div style={{ fontSize: '0.8rem', color: 'var(--app-text-muted)', marginBottom: '8px' }}>
             {text}
-            {docSlug && (
-                <a
-                    href={`${BASE_DOCS_URL}${docSlug}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-decoration-none ms-1"
-                    style={{ color: 'var(--app-primary-accent)', fontSize: '0.75rem' }}
-                    title="View documentation"
-                >
-                    ⓘ
-                </a>
-            )}
         </div>
     );
 }
@@ -290,8 +279,13 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
     const { projectData, updateProjectData } = useProjectData();
     const [form, setForm] = useState(() => {
         const saved = projectData.maintenance_repair_data;
-        return (saved && Object.keys(saved).length > 0) ? saved : INITIAL_STATE;
+        return normalizeMaintenanceData((saved && Object.keys(saved).length > 0) ? { ...INITIAL_STATE, ...saved } : INITIAL_STATE);
     });
+
+    useEffect(() => {
+        const next = normalizeMaintenanceData({ ...INITIAL_STATE, ...(projectData.maintenance_repair_data || {}) });
+        setForm(prev => JSON.stringify(next) !== JSON.stringify(prev) ? next : prev);
+    }, [projectData.maintenance_repair_data]);
 
     useEffect(() => {
         updateProjectData('maintenance_repair_data', form);
@@ -299,6 +293,14 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
 
     const [errors, setErrors] = useState(new Set());
     const [validationMsg, setValidationMsg] = useState('');
+    const [statusMsg, setStatusMsg] = useState('');
+
+    // Auto-dismiss the transient status line
+    useEffect(() => {
+        if (!statusMsg) return undefined;
+        const timer = setTimeout(() => setStatusMsg(''), 3000);
+        return () => clearTimeout(timer);
+    }, [statusMsg]);
 
     // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -321,6 +323,7 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
         }));
         setErrors(new Set());
         setValidationMsg('');
+        setStatusMsg('Suggested values applied');
         if (engine && engine._log) {
             engine._log('Maintenance: Suggested values applied.');
         } else if (controller && controller.engine) {
@@ -329,9 +332,11 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
     };
 
     const handleClearAll = () => {
+        if (!window.confirm('Clear all maintenance and repair inputs? This cannot be undone.')) return;
         setForm(INITIAL_STATE);
         setErrors(new Set());
         setValidationMsg('');
+        setStatusMsg('');
         if (engine && engine._log) {
             engine._log('Maintenance: All fields cleared.');
         } else if (controller && controller.engine) {
@@ -342,27 +347,19 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
     // ── Validation ────────────────────────────────────────────────────────────
 
     const validate = () => {
+        const messages = validateMaintenanceData(form);
         const newErrors = new Set();
-        const missing = [];
-
         REQUIRED_KEYS.forEach((key) => {
-            const val = form[key];
-            const isEmpty = val === '' || val === null || val === undefined;
-            const isZero = !isEmpty && Number(val) <= 0;
-            if (isEmpty || isZero) {
-                newErrors.add(key);
-                const field = ALL_FIELDS.find((f) => f.key === key);
-                missing.push(field?.label ?? key);
-            }
+            if (messages.some((message) => message.includes(key.replace(/_/g, ' ')))) newErrors.add(key);
         });
 
         setErrors(newErrors);
         if (newErrors.size > 0) {
-            const msg = `Missing required maintenance data: ${missing.join(', ')}`;
+            const msg = `Maintenance data needs attention: ${messages.join(' ')}`;
             setValidationMsg(msg);
             if (engine && engine._log) engine._log(msg);
             else if (controller && controller.engine) controller.engine._log(msg);
-            return { valid: false, errors: missing };
+            return { valid: false, errors: messages };
         }
 
         setValidationMsg('');
@@ -412,6 +409,12 @@ const MaintenanceAndRepair = ({ controller, engine }) => {
                     Clear All
                 </button>
             </div>
+
+            {statusMsg && (
+                <div className="mb-3" style={{ fontSize: '0.85rem', color: 'var(--app-primary-accent)' }} role="status" aria-live="polite">
+                    ✓ {statusMsg}
+                </div>
+            )}
 
             {/* Validation message */}
             {validationMsg && (

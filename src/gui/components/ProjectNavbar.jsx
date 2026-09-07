@@ -1,9 +1,8 @@
+/* eslint-disable no-unused-vars */
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Navbar, Nav, NavDropdown, Button, Tooltip, OverlayTrigger } from 'react-bootstrap';
-import { FaHome, FaLock, FaLockOpen, FaInfoCircle, FaCheckCircle, FaUndo, FaSave, FaCalculator, FaHistory, FaFolderOpen, FaPlus, FaSignOutAlt, FaCog } from 'react-icons/fa';
-import SaveCheckpointModal from './SaveCheckpointModal';
-import CheckpointManagerModal from './CheckpointManagerModal';
+import { Navbar, Nav, NavDropdown, Button, Tooltip, OverlayTrigger, Spinner } from 'react-bootstrap';
+import { FaHome, FaLock, FaLockOpen, FaInfoCircle, FaCheckCircle, FaUndo, FaSave, FaCalculator, FaHistory, FaFolderOpen, FaPlus, FaSignOutAlt, FaCog, FaExclamationTriangle, FaBars } from 'react-icons/fa';
 import NewProjectModal from './NewProjectModal';
 import OpenProjectModal from './OpenProjectModal';
 import RenameProjectModal from './RenameProjectModal';
@@ -111,9 +110,7 @@ const CustomNavBtn = ({ variant, outlineColor, outlineHoverBg, children, icon: I
     );
 };
 
-const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDeleteCheckpoint, onNewProject, onOpenProject, checkpoints, addLog, isLocked, setIsLocked, projectName, projectData, onRenameProject, onExportProject, projectId }) => {
-    const [showSaveModal, setShowSaveModal] = useState(false);
-    const [showManagerModal, setShowManagerModal] = useState(false);
+const ProjectNavbar = ({ onBackToHome, setActiveNode, onNewProject, onOpenProject, addLog, isLocked, setIsLocked, projectName, projectData, onRenameProject, onExportProject, projectId, saveState = 'saved', onToggleSidebar }) => {
     const [showNewProjectModal, setShowNewProjectModal] = useState(false);
     const [showOpenProjectModal, setShowOpenProjectModal] = useState(false);
     const [showRenameModal, setShowRenameModal] = useState(false);
@@ -122,13 +119,8 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [showInfoModal, setShowInfoModal] = useState(false);
 
-    const handleRestoreCheckpoint = (cp) => {
-        alert(`Restoring checkpoint: "${cp.label}"\n(This would typically replace current project data with the snapshot)`);
-        addLog(`Restore initiated for checkpoint: '${cp.label}'.`);
-    };
-
     return (
-        <Navbar expand="lg" className="px-3 border-bottom custom-project-nav" style={{ 
+        <Navbar expand="lg" className="px-3 border-bottom custom-project-nav flex-shrink-0" style={{ 
             backgroundColor: 'var(--app-bg-card)', 
             borderBottomColor: 'var(--app-border-light)',
             minHeight: '48px',
@@ -142,10 +134,15 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
             `}</style>
             
             {/* Logo and Brand Name */}
-            <Link to="/" className="d-flex align-items-center me-3 navbar-brand" style={{ cursor: 'pointer', color: 'var(--app-text-primary)', fontWeight: 'bold', textDecoration: 'none' }} onClick={() => addLog("Project closed. Returning to home.")}>
-                <img src={Logo3psLCCA} alt="3psLCCA Logo" width="28" height="28" className="me-2" style={{ objectFit: 'contain' }} />
-                <span style={{ fontSize: '1rem' }}>3psLCCA</span>
-            </Link>
+            <div className="d-flex align-items-center">
+                <Button variant="link" className="d-md-none p-0 me-3 text-secondary d-flex align-items-center justify-content-center" onClick={onToggleSidebar} style={{ color: 'var(--app-text-primary)' }}>
+                    <FaBars size={20} />
+                </Button>
+                <Link to="/" className="d-flex align-items-center me-3 navbar-brand m-0" style={{ cursor: 'pointer', color: 'var(--app-text-primary)', fontWeight: 'bold', textDecoration: 'none' }} onClick={() => addLog("Project closed. Returning to home.")}>
+                    <img src={Logo3psLCCA} alt="3psLCCA Logo" width="28" height="28" className="me-2" style={{ objectFit: 'contain' }} />
+                    <span style={{ fontSize: '1rem' }}>3psLCCA</span>
+                </Link>
+            </div>
             
             <Navbar.Toggle aria-controls="project-navbar-nav" className="border-0 shadow-none" style={{ filter: 'invert(0.5)' }} />
             <Navbar.Collapse id="project-navbar-nav">
@@ -187,34 +184,21 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
             </Nav>
 
             <Nav className="ms-auto align-items-center column-gap-2 flex-row flex-wrap mt-2 mt-lg-0">
-                <div className="d-flex align-items-center me-2" style={{ color: 'var(--app-primary-accent)', fontSize: '12px', opacity: 0.9 }}>
-                    <FaCheckCircle size={12} className="me-1" />
-                    <span>All changes saved</span>
+                <div className="d-flex align-items-center me-2" style={{ 
+                    color: saveState === 'error' ? 'var(--bs-danger)' : (saveState === 'saving' ? 'var(--bs-warning)' : (saveState === 'offline' ? 'var(--app-text-muted)' : 'var(--app-primary-accent)')), 
+                    fontSize: '12px', 
+                    opacity: 0.9 
+                }}>
+                    {saveState === 'saving' && <Spinner size="sm" animation="border" className="me-1" style={{ width: '12px', height: '12px', borderWidth: '0.15em' }} />}
+                    {saveState === 'saved' && <FaCheckCircle size={12} className="me-1" />}
+                    {saveState === 'offline' && <FaCheckCircle size={12} className="me-1" />}
+                    {saveState === 'error' && <FaExclamationTriangle size={12} className="me-1" />}
+                    <span>
+                        {saveState === 'saving' ? 'Saving...' : (saveState === 'error' ? 'Save failed - retry' : (saveState === 'offline' ? 'Saved Locally (Offline)' : 'All changes saved'))}
+                    </span>
                 </div>
                 
-                <CustomNavBtn 
-                    variant="outline-secondary" 
-                    outlineColor="var(--app-border-mid)" 
-                    outlineHoverBg="var(--app-bg-alt)"
-                    icon={FaSave}
-                    onClick={() => setShowSaveModal(true)}
-                >
-                    Save Checkpoint
-                </CustomNavBtn>
-                
-                <CustomNavBtn 
-                    variant="outline-secondary" 
-                    outlineColor="var(--app-border-mid)" 
-                    outlineHoverBg="var(--app-bg-alt)"
-                    icon={FaHistory}
-                    onClick={() => {
-                        setShowManagerModal(true);
-                        addLog("Opened Checkpoint Manager.");
-                    }}
-                >
-                    Checkpoints
-                </CustomNavBtn>
-                
+
                 <Button 
                     variant="outline-secondary" 
                     size="sm" 
@@ -232,16 +216,16 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
                     onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--app-primary-accent)'; e.currentTarget.style.borderColor = 'var(--app-primary-accent)'; e.currentTarget.style.color = 'var(--app-bg-card)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.borderColor = 'var(--app-border-mid)'; e.currentTarget.style.color = 'var(--app-text-secondary)'; }}
                     onClick={() => {
-                        addLog("Calculation request initiated...");
-                        setTimeout(() => addLog("Calculation engine: processing LCCA data models."), 300);
-                        setTimeout(() => addLog("Calculation success: output matrices generated."), 1200);
-                        setActiveNode('Outputs');
+                        // The calculation itself runs on the Results page; the
+                        // project is locked there once it succeeds.
+                        addLog("Opening Results — run the calculation from there.");
+                        setActiveNode('Results');
                     }}
                 >
                     <FaCalculator size={13} className="me-2" />
                     Calculate
                 </Button>
-
+ 
                 <OverlayTrigger
                     placement="bottom"
                     overlay={<Tooltip>{isLocked ? 'Unlock Project' : 'Lock Project'}</Tooltip>}
@@ -249,9 +233,18 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
                     <Button 
                         variant="link"
                         className="p-1 mx-1 text-secondary"
+                        aria-label={isLocked ? 'Unlock project' : 'Lock project'}
+                        aria-pressed={isLocked}
                         onClick={() => {
-                            setIsLocked(!isLocked);
-                            addLog(isLocked ? "Project unlocked. Operations resumed." : "Project locked. All operations suspended.");
+                            if (isLocked) {
+                                if (window.confirm("Unlock the project to edit its inputs?\n\nNothing is deleted: your inputs stay as they are and the current results remain on the Results page, but they will be out of date until you calculate again.")) {
+                                    setIsLocked(false);
+                                    addLog("Project unlocked. Inputs can be edited; recalculate to refresh the results.");
+                                }
+                            } else {
+                                setIsLocked(true);
+                                addLog("Project locked. All operations suspended.");
+                            }
                         }}
                         style={{ transition: 'all 0.2s' }}
                     >
@@ -261,23 +254,6 @@ const ProjectNavbar = ({ onBackToHome, setActiveNode, onSaveCheckpoint, onDelete
             </Nav>
             </Navbar.Collapse>
 
-            <SaveCheckpointModal 
-                show={showSaveModal} 
-                onHide={() => setShowSaveModal(false)} 
-                onSave={onSaveCheckpoint}
-            />
-
-            <CheckpointManagerModal 
-                show={showManagerModal}
-                onHide={() => setShowManagerModal(false)}
-                checkpoints={checkpoints || []}
-                onDelete={onDeleteCheckpoint}
-                onRestore={handleRestoreCheckpoint}
-                onAddNew={() => {
-                    setShowManagerModal(false);
-                    setShowSaveModal(true);
-                }}
-            />
 
             <NewProjectModal 
                 show={showNewProjectModal}

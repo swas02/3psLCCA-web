@@ -14,18 +14,19 @@ const SIDEBAR_TREE = {
         ],
         "Traffic Data": [],
         "Financial Data": [],
-        "Carbon Emission Data": [
+        "Carbon Emissions Data": [
+            "Social Cost of Carbon",
             "Material Emissions",
             "Transportation Emissions",
-            "Machinery Emissions",
-            "Traffic Diversion Emissions",
-            "Social Cost of Carbon",
+            "Machinery/Equipment Emissions",
+            "Traffic Rerouting Emissions",
         ],
         "Maintenance and Repair": [],
         "Recycling": [],
         "Demolition": [],
     },
-    "Outputs": {},
+    "Results": {},
+    "Report": {},
 };
 
 const ICON_MAP = {
@@ -35,12 +36,15 @@ const ICON_MAP = {
     "Construction Work Data": "build",
     "Traffic Data": "truck",
     "Financial Data": "cash",
-    "Carbon Emission Data": "cloud",
+    "Carbon Emissions Data": "cloud",
     "Maintenance and Repair": "settings",
     "Recycling": "autorenew",
     "Demolition": "trash",
-    "Outputs": "bar-chart",
+    "Results": "bar-chart",
+    "Report": "list",
 };
+
+const GROUP_ONLY_NODES = new Set(['Input Parameters']);
 
 const TreeNode = ({ label, childrenData, depth, activeNode, setActiveNode }) => {
     const hasChildren = childrenData && (Array.isArray(childrenData) ? childrenData.length > 0 : Object.keys(childrenData).length > 0);
@@ -51,17 +55,13 @@ const TreeNode = ({ label, childrenData, depth, activeNode, setActiveNode }) => 
     const handleToggle = (e) => {
         e.stopPropagation();
 
-        let targetNode = label;
         if (hasChildren) {
-            setIsExpanded(true);
-            if (Array.isArray(childrenData) && childrenData.length > 0) {
-                targetNode = childrenData[0];
-            } else if (childrenData && typeof childrenData === 'object' && Object.keys(childrenData).length > 0) {
-                targetNode = Object.keys(childrenData)[0];
-            }
+            setIsExpanded(prev => !prev);
         }
 
-        setActiveNode(targetNode);
+        // Pure groups have no page of their own; clicking them only toggles.
+        if (GROUP_ONLY_NODES.has(label)) return;
+        setActiveNode(label);
     };
 
     const nodeColor = isActive ? 'var(--app-text-primary)' : 'var(--app-text-secondary)';
@@ -80,8 +80,14 @@ const TreeNode = ({ label, childrenData, depth, activeNode, setActiveNode }) => 
                     color: isActive ? 'var(--app-primary-accent)' : nodeColor,
                 }}
                 onClick={handleToggle}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(e); } }}
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
+                role="button"
+                tabIndex={0}
+                aria-label={hasChildren ? `${label} section${GROUP_ONLY_NODES.has(label) ? '' : ' page'}, ${isExpanded ? 'expanded' : 'collapsed'}` : label}
+                aria-expanded={hasChildren ? isExpanded : undefined}
+                aria-current={isActive ? 'page' : undefined}
             >
                 {isActive && (
                     <div style={{ position: 'absolute', left: 0, top: '4px', bottom: '4px', width: '3px', backgroundColor: 'var(--app-primary-accent)', borderRadius: '0 3px 3px 0' }}></div>
@@ -103,8 +109,8 @@ const TreeNode = ({ label, childrenData, depth, activeNode, setActiveNode }) => 
                 <span className="text-nowrap overflow-hidden text-truncate">{label}</span>
             </div>
 
-            {hasChildren && isExpanded && (
-                <div className="w-100">
+            {hasChildren && (
+                <div className="w-100" style={{ display: isExpanded ? 'block' : 'none' }}>
                     {Array.isArray(childrenData)
                         ? childrenData.map(child => (
                             <TreeNode
@@ -133,13 +139,13 @@ const TreeNode = ({ label, childrenData, depth, activeNode, setActiveNode }) => 
     );
 };
 
-const Sidebar = ({ activeNode, setActiveNode }) => {
+const Sidebar = ({ activeNode, setActiveNode, isMobile = false }) => {
     const [sidebarWidth, setSidebarWidth] = useState(250);
     const [isResizing, setIsResizing] = useState(false);
 
     React.useEffect(() => {
         const handleMouseMove = (e) => {
-            if (!isResizing) return;
+            if (!isResizing || isMobile) return;
             // Depending on the layout, clientX might not perfectly match width, but it's close enough if standard left align.
             // Minimum 200px, maximum 600px width
             const newWidth = Math.min(Math.max(e.clientX, 200), 600);
@@ -161,16 +167,17 @@ const Sidebar = ({ activeNode, setActiveNode }) => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isResizing]);
+    }, [isResizing, isMobile]);
 
     const handleMouseDown = (e) => {
+        if (isMobile) return;
         setIsResizing(true);
         document.body.style.cursor = 'col-resize';
         e.preventDefault();
     };
 
     return (
-        <div className="position-relative flex-shrink-0 h-100" style={{ width: `${sidebarWidth}px` }}>
+        <div className="position-relative flex-shrink-0 h-100" style={{ width: isMobile ? '100%' : `${sidebarWidth}px` }}>
             <div className="d-flex flex-column sidebar-scrollbar w-100 h-100 overflow-y-auto" style={{
                 backgroundColor: 'var(--app-bg-card)',
                 color: 'var(--app-text-primary)',
@@ -225,23 +232,25 @@ const Sidebar = ({ activeNode, setActiveNode }) => {
                 </div>
             </div> {/* End of inner container */}
 
-            {/* Draggable Resizer Line */}
-            <div
-                onMouseDown={handleMouseDown}
-                style={{
-                    position: 'absolute',
-                    top: 0,
-                    right: -3,
-                    width: '6px',
-                    height: '100%',
-                    cursor: 'col-resize',
-                    zIndex: 100,
-                    backgroundColor: isResizing ? 'color-mix(in srgb, var(--app-primary-accent) 80%, transparent)' : 'transparent',
-                    transition: 'background-color 0.2s ease',
-                }}
-                onMouseEnter={(e) => { if (!isResizing) e.target.style.backgroundColor = 'color-mix(in srgb, var(--app-primary-accent) 50%, transparent)'; }}
-                onMouseLeave={(e) => { if (!isResizing) e.target.style.backgroundColor = 'transparent'; }}
-            />
+            {/* Draggable Resizer Line (Only on Desktop) */}
+            {!isMobile && (
+                <div
+                    onMouseDown={handleMouseDown}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: -3,
+                        width: '6px',
+                        height: '100%',
+                        cursor: 'col-resize',
+                        zIndex: 100,
+                        backgroundColor: isResizing ? 'color-mix(in srgb, var(--app-primary-accent) 80%, transparent)' : 'transparent',
+                        transition: 'background-color 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => { if (!isResizing) e.target.style.backgroundColor = 'color-mix(in srgb, var(--app-primary-accent) 50%, transparent)'; }}
+                    onMouseLeave={(e) => { if (!isResizing) e.target.style.backgroundColor = 'transparent'; }}
+                />
+            )}
         </div>
     );
 };

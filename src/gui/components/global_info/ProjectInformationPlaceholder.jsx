@@ -1,32 +1,45 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { data as countriesData } from '../utils/countriesdata';
 import { materialCatalog } from '../utils/materialCatalog';
 import { useProjectData } from '../../../contexts/ProjectDataContext';
+import { Dropdown } from 'react-bootstrap';
+import { backfillGeneralInfo } from '../../../utils/projectCreation';
+import { normalizeGeneralInfo, validateGeneralInfoData } from '../../../utils/projectPageSchema';
+import { getProfiles, getActiveProfile } from '../../utils/profileStorage';
+import ProfileAvatar from '../ProfileAvatar';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const BASE_DOCS_URL = 'https://yourdocs.com/general/';
 
 const COUNTRIES = countriesData.map((c) => c.COUNTRY);
 
 const INITIAL_STATE = {
     // Project Information
-    project_name:        '',
-    project_code:        '',
+    project_name: '',
+    project_code: '',
     project_description: '',
-    remarks:             '',
-    // Evaluating Agency
-    agency_name:         '',
-    contact_person:      '',
-    agency_address:      '',
-    agency_country:      '',
-    agency_email:        '',
-    agency_phone:        '',
+    remarks: '',
+    // Assessing Organisation
+    agency_logo: null,
+    agency_name: '',
+    contact_person: '',
+    agency_address: '',
+    agency_country: '',
+    agency_email: '',
+    agency_phone: '',
+    // Reviewer
+    reviewer_name: '',
+    reviewer_organization: '',
+    reviewer_address: '',
+    reviewer_country: '',
+    reviewer_email: '',
+    reviewer_phone: '',
     // Project Settings (read-only / locked — shown but not editable)
-    project_country:     '',
-    project_currency:    '',
-    unit_system:         '',
-    sor_database:        '',
+    project_country: '',
+    project_currency: '',
+    unit_system: '',
+    sor_database: '',
 };
 
 const REQUIRED_KEYS = new Set(['project_name']);
@@ -34,13 +47,20 @@ const REQUIRED_KEYS = new Set(['project_name']);
 // Fields that are display-only (locked)
 const LOCKED_KEYS = new Set(['project_country', 'project_currency', 'unit_system']);
 
+// Light email check: something@something.tld — advisory only, never blocks saving
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isInvalidEmail = (value) => Boolean(value && value.toString().trim()) && !EMAIL_PATTERN.test(value.toString().trim());
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function SectionHeader({ title }) {
+function SectionHeader({ title, rightElement }) {
     return (
-        <h5 className="mb-4 fw-bold pb-2 mt-4" style={{ borderBottom: '1px solid var(--app-border-dark)', fontSize: '1rem', color: 'var(--app-text-primary)', transition: 'all 0.3s' }}>
-            {title}
-        </h5>
+        <div className="d-flex align-items-center justify-content-between mb-4 mt-4 pb-2" style={{ borderBottom: '1px solid var(--app-border-dark)' }}>
+            <h5 className="mb-0 fw-bold" style={{ fontSize: '1rem', color: 'var(--app-text-primary)' }}>
+                {title}
+            </h5>
+            {rightElement && <div>{rightElement}</div>}
+        </div>
     );
 }
 
@@ -52,7 +72,7 @@ function FieldHint({ text }) {
     );
 }
 
-function TextField({ id, label, hint, required, value, onChange, hasError, disabled }) {
+function TextField({ id, label, hint, required, value, onChange, hasError, disabled, type = 'text', errorMessage }) {
     return (
         <div className="mb-4">
             <label htmlFor={id} className="fw-bold mb-1 d-block" style={{ fontSize: '0.9rem', color: 'var(--app-text-secondary)', transition: 'color 0.3s' }}>
@@ -61,13 +81,20 @@ function TextField({ id, label, hint, required, value, onChange, hasError, disab
             <FieldHint text={hint} />
             <input
                 id={id}
-                type="text"
+                type={type}
                 value={value}
                 onChange={(e) => onChange && onChange(id, e.target.value)}
                 disabled={disabled}
                 className={`form-control ${hasError ? 'is-invalid' : ''}`}
                 style={disabled ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
+                aria-invalid={hasError || undefined}
+                aria-describedby={errorMessage ? `${id}-error` : undefined}
             />
+            {errorMessage && (
+                <div id={`${id}-error`} className="invalid-feedback d-block" style={{ fontSize: '0.8rem' }}>
+                    {errorMessage}
+                </div>
+            )}
         </div>
     );
 }
@@ -104,7 +131,7 @@ function PhoneField({ id, label, hint, value, onChange, hasError }) {
                 value={value}
                 onChange={(e) => onChange(id, e.target.value)}
                 className={`form-control ${hasError ? 'is-invalid' : ''}`}
-                placeholder="+1 234 567 8900"
+                placeholder="+91 98765 43210"
             />
         </div>
     );
@@ -187,22 +214,50 @@ function SelectField({ id, label, hint, required, options, value, onChange, hasE
 
 const ProjectInformationPlaceholder = ({ controller }) => {
     const { projectData, updateProjectData } = useProjectData();
+    const containerRef = useRef(null);
     const [form, setForm] = useState(() => {
-        const saved = projectData.general_info;
-        return (saved && Object.keys(saved).length > 0) ? { ...INITIAL_STATE, ...saved } : INITIAL_STATE;
+        const filled = backfillGeneralInfo(projectData);
+        const saved = filled.general_info || {};
+        const activeProfile = getActiveProfile() || {};
+        const merged = {
+            ...INITIAL_STATE,
+            ...saved,
+            agency_logo: saved.agency_logo || activeProfile.agency_logo || null,
+            agency_name: saved.agency_name || activeProfile.agency_name || '',
+            contact_person: saved.contact_person || activeProfile.contact_person || '',
+            agency_address: saved.agency_address || activeProfile.agency_address || '',
+            agency_country: saved.agency_country || activeProfile.agency_country || '',
+            agency_email: saved.agency_email || activeProfile.agency_email || '',
+            agency_phone: saved.agency_phone || activeProfile.agency_phone || '',
+        };
+        return normalizeGeneralInfo(merged, filled);
     });
 
     // Sync local state if context data changes (e.g. from global storage)
     useEffect(() => {
-        const saved = projectData.general_info;
+        const filled = backfillGeneralInfo(projectData);
+        const saved = filled.general_info;
         if (saved) {
-            setForm(prev => {
-                const isDifferent = Object.keys(saved).some(key => saved[key] !== prev[key]);
-                return isDifferent ? { ...prev, ...saved } : prev;
-            });
+            if (containerRef.current && containerRef.current.contains(document.activeElement)) {
+                return;
+            }
+            const activeProfile = getActiveProfile() || {};
+            const merged = {
+                ...INITIAL_STATE,
+                ...saved,
+                agency_logo: saved.agency_logo || activeProfile.agency_logo || null,
+                agency_name: saved.agency_name || activeProfile.agency_name || '',
+                contact_person: saved.contact_person || activeProfile.contact_person || '',
+                agency_address: saved.agency_address || activeProfile.agency_address || '',
+                agency_country: saved.agency_country || activeProfile.agency_country || '',
+                agency_email: saved.agency_email || activeProfile.agency_email || '',
+                agency_phone: saved.agency_phone || activeProfile.agency_phone || '',
+            };
+            const next = normalizeGeneralInfo(merged, filled);
+            setForm(prev => JSON.stringify(next) !== JSON.stringify(prev) ? next : prev);
         }
-    }, [projectData.general_info]);
-    
+    }, [projectData.general_info, projectData.country, projectData.currency, projectData.unitSystem, projectData.name]);
+
     const [errors, setErrors] = useState(new Set());
     const [validationMsg, setValidationMsg] = useState('');
 
@@ -239,7 +294,9 @@ const ProjectInformationPlaceholder = ({ controller }) => {
         const skipKeys = new Set([...LOCKED_KEYS, 'sor_database']);
         const next = { ...form };
         Object.keys(INITIAL_STATE).forEach((k) => {
-            if (!skipKeys.has(k)) next[k] = '';
+            if (!skipKeys.has(k)) {
+                next[k] = k === 'agency_logo' ? null : '';
+            }
         });
         setForm(next);
         setErrors(new Set());
@@ -247,26 +304,36 @@ const ProjectInformationPlaceholder = ({ controller }) => {
         controller?.engine?._log('General Info: All fields cleared.');
     };
 
+    const handleLoadProfile = (profileName) => {
+        const profiles = getProfiles();
+        const profile = profiles[profileName];
+        if (profile) {
+            setForm(prev => ({
+                ...prev,
+                agency_logo: profile.agency_logo || null,
+                agency_name: profile.agency_name || '',
+                contact_person: profile.contact_person || '',
+                agency_address: profile.agency_address || '',
+                agency_country: profile.agency_country || '',
+                agency_email: profile.agency_email || '',
+                agency_phone: profile.agency_phone || '',
+            }));
+            controller?.engine?._log(`General Info: Loaded agency profile '${profileName}'.`);
+        }
+    };
+
     // ── Validation ────────────────────────────────────────────────────────────
 
     const validate = () => {
-        const newErrors = new Set();
-        const missing = [];
-
-        REQUIRED_KEYS.forEach((key) => {
-            const val = form[key];
-            if (val === '' || val === null || val === undefined) {
-                newErrors.add(key);
-                missing.push(key.replace(/_/g, ' '));
-            }
-        });
+        const messages = validateGeneralInfoData(form);
+        const newErrors = new Set(messages.length ? ['project_name'] : []);
 
         setErrors(newErrors);
         if (newErrors.size > 0) {
-            const msg = `Missing required general info: ${missing.join(', ')}`;
+            const msg = messages.join(' ');
             setValidationMsg(msg);
             controller?.engine?._log(msg);
-            return { valid: false, errors: missing };
+            return { valid: false, errors: messages };
         }
 
         setValidationMsg('');
@@ -278,7 +345,7 @@ const ProjectInformationPlaceholder = ({ controller }) => {
     // ── Render ────────────────────────────────────────────────────────────────
 
     return (
-        <div style={{ padding: '24px', color: 'var(--app-text-primary)' }}>
+        <div ref={containerRef} className="p-3 p-md-4" style={{ color: 'var(--app-text-primary)' }}>
 
             {/* ── Project Information ──────────────────────────────────────── */}
             <SectionHeader title="Project Information" />
@@ -320,12 +387,66 @@ const ProjectInformationPlaceholder = ({ controller }) => {
                 hasError={hasError('remarks')}
             />
 
-            {/* ── Evaluating Agency ────────────────────────────────────────── */}
-            <SectionHeader title="Evaluating Agency" />
+            {/* ── Assessing Organisation ────────────────────────────────────────── */}
+            <SectionHeader 
+                title="Assessing Organisation" 
+                rightElement={
+                    <Dropdown align="end">
+                        <Dropdown.Toggle 
+                            variant="light" 
+                            size="sm" 
+                            style={{ backgroundColor: 'var(--app-bg-alt)', color: 'var(--app-text-primary)', border: '1px solid var(--app-border-mid)', fontSize: '0.85rem' }}
+                        >
+                            Load Agency Profile
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu style={{ backgroundColor: 'var(--app-bg-card)', border: '1px solid var(--app-border-mid)' }}>
+                            {Object.keys(getProfiles()).length > 0 ? (
+                                Object.keys(getProfiles()).map(name => (
+                                    <Dropdown.Item 
+                                        key={name} 
+                                        onClick={() => handleLoadProfile(name)}
+                                        style={{ color: 'var(--app-text-primary)' }}
+                                        onMouseEnter={(e) => { e.target.style.backgroundColor = 'var(--app-bg-alt)' }}
+                                        onMouseLeave={(e) => { e.target.style.backgroundColor = 'transparent' }}
+                                    >
+                                        {name}
+                                    </Dropdown.Item>
+                                ))
+                            ) : (
+                                <Dropdown.Item disabled style={{ color: 'var(--app-text-muted)' }}>
+                                    No profiles found
+                                </Dropdown.Item>
+                            )}
+                        </Dropdown.Menu>
+                    </Dropdown>
+                }
+            />
+
+            <TextField
+                id="contact_person"
+                label="Assessor's Name"
+                hint="Primary contact handling this project."
+                value={form.contact_person}
+                onChange={handleChange}
+                hasError={hasError('contact_person')}
+            />
+
+            <div className="mb-4">
+                <label className="fw-bold mb-1 d-block" style={{ fontSize: '0.9rem', color: 'var(--app-text-secondary)' }}>
+                    Organisation's Logo
+                </label>
+                <FieldHint text="Appears on the report cover page. PNG or JPG recommended." />
+                <ProfileAvatar 
+                    size={60} 
+                    profileName={form.agency_name || 'Agency'} 
+                    logoData={form.agency_logo} 
+                    onLogoChange={(base64) => handleChange('agency_logo', base64)} 
+                />
+            </div>
 
             <TextField
                 id="agency_name"
-                label="Agency Name"
+                label="Organisation's Name"
                 hint="Name of the organization responsible for this evaluation."
                 value={form.agency_name}
                 onChange={handleChange}
@@ -333,18 +454,9 @@ const ProjectInformationPlaceholder = ({ controller }) => {
             />
 
             <TextField
-                id="contact_person"
-                label="Contact Person"
-                hint="Primary contact handling this project."
-                value={form.contact_person}
-                onChange={handleChange}
-                hasError={hasError('contact_person')}
-            />
-
-            <TextField
                 id="agency_address"
-                label="Agency Address"
-                hint="Street address of the evaluating agency."
+                label="Organisation's Address"
+                hint="Appears in the report footer."
                 value={form.agency_address}
                 onChange={handleChange}
                 hasError={hasError('agency_address')}
@@ -353,7 +465,7 @@ const ProjectInformationPlaceholder = ({ controller }) => {
             <SelectField
                 id="agency_country"
                 label="Country"
-                hint="Country where the evaluating agency is based."
+                hint="Country where the evaluating agency is based. Used for report localisation."
                 options={COUNTRIES}
                 value={form.agency_country}
                 onChange={handleChange}
@@ -362,11 +474,13 @@ const ProjectInformationPlaceholder = ({ controller }) => {
 
             <TextField
                 id="agency_email"
+                type="email"
                 label="Email"
                 hint="Official email address for correspondence."
                 value={form.agency_email}
                 onChange={handleChange}
-                hasError={hasError('agency_email')}
+                hasError={hasError('agency_email') || isInvalidEmail(form.agency_email)}
+                errorMessage={isInvalidEmail(form.agency_email) ? 'Enter a valid email address' : ''}
             />
 
             <PhoneField
@@ -376,6 +490,66 @@ const ProjectInformationPlaceholder = ({ controller }) => {
                 value={form.agency_phone}
                 onChange={handleChange}
                 hasError={hasError('agency_phone')}
+            />
+
+            {/* ── Reviewer ────────────────────────────────────────────────────── */}
+            <SectionHeader title="Reviewer" />
+
+            <TextField
+                id="reviewer_name"
+                label="Reviewer's Name"
+                hint=""
+                value={form.reviewer_name}
+                onChange={handleChange}
+                hasError={hasError('reviewer_name')}
+            />
+
+            <TextField
+                id="reviewer_organization"
+                label="Reviewer's Organisation"
+                hint=""
+                value={form.reviewer_organization}
+                onChange={handleChange}
+                hasError={hasError('reviewer_organization')}
+            />
+
+            <TextField
+                id="reviewer_address"
+                label="Reviewer's Address"
+                hint=""
+                value={form.reviewer_address}
+                onChange={handleChange}
+                hasError={hasError('reviewer_address')}
+            />
+
+            <SelectField
+                id="reviewer_country"
+                label="Country"
+                hint="Country where the reviewing agency is located."
+                options={COUNTRIES}
+                value={form.reviewer_country}
+                onChange={handleChange}
+                hasError={hasError('reviewer_country')}
+            />
+
+            <TextField
+                id="reviewer_email"
+                type="email"
+                label="Email"
+                hint=""
+                value={form.reviewer_email}
+                onChange={handleChange}
+                hasError={hasError('reviewer_email') || isInvalidEmail(form.reviewer_email)}
+                errorMessage={isInvalidEmail(form.reviewer_email) ? 'Enter a valid email address' : ''}
+            />
+
+            <PhoneField
+                id="reviewer_phone"
+                label="Phone"
+                hint=""
+                value={form.reviewer_phone}
+                onChange={handleChange}
+                hasError={hasError('reviewer_phone')}
             />
 
             {/* ── Project Settings (locked, read-only) ─────────────────────── */}

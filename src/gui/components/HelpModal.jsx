@@ -1,6 +1,6 @@
+/* eslint-disable no-unused-vars */
 import React from 'react';
 import { Modal, Button } from 'react-bootstrap';
-import { FaInfoCircle } from 'react-icons/fa';
 import Logo3psLCCA from '../../assets/logo-3psLCCA.svg';
 
 const HelpModal = ({ show, onHide, title, message }) => {
@@ -39,9 +39,6 @@ const HelpModal = ({ show, onHide, title, message }) => {
                 }
                 .help-info-modal .modal-body {
                     padding: 24px;
-                    display: flex;
-                    align-items: center;
-                    gap: 20px;
                     background-color: #1a1d21;
                 }
                 .help-info-modal .modal-footer {
@@ -80,11 +77,6 @@ const HelpModal = ({ show, onHide, title, message }) => {
                 .help-info-modal .close-btn:hover {
                     color: #ffffff;
                 }
-                .info-icon-large {
-                    color: #3b82f6;
-                    font-size: 48px;
-                    flex-shrink: 0;
-                }
                 .message-text {
                     font-size: 14px;
                     line-height: 1.5;
@@ -100,7 +92,6 @@ const HelpModal = ({ show, onHide, title, message }) => {
                 <button className="close-btn" onClick={onHide}>&times;</button>
             </div>
             <Modal.Body>
-                <FaInfoCircle className="info-icon-large" />
                 <div className="message-text">
                     {message}
                 </div>

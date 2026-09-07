@@ -1,70 +1,45 @@
+/* eslint-disable no-unused-vars */
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createDefaultProject, normalizeProjectData } from '../utils/projectSchema';
+import { normalizeProjectSection } from '../utils/projectPageSchema';
 
 const ProjectDataContext = createContext();
 
 export const useProjectData = () => useContext(ProjectDataContext);
 
 export const ProjectDataProvider = ({ children, projectId = 'default', initialData, onStateChange }) => {
-    const storageKey = `project_data_${projectId}`;
-
     const [projectData, setProjectData] = useState(() => {
-        const saved = localStorage.getItem(storageKey);
-        if (saved) {
-            try {
-                return JSON.parse(saved);
-            } catch (e) {
-                console.error("Failed to parse project data from localStorage", e);
-            }
-        }
-        return initialData || {
-            name: 'Bridge_Assessment_01',
-            general_info: {},
-            bridge_data: {},
-            financial_data: {},
-            traffic_data: {},
-            foundation_data: [],
-            substructure_data: [],
-            superstructure_data: [],
-            miscellaneous_data: [],
-            carbon_emission_data: {},
-            maintenance_repair_data: {},
-            recycling_data: {},
-            demolition_data: {},
-            outputs_data: {}
-        };
+        return normalizeProjectData(initialData);
     });
 
     useEffect(() => {
-        localStorage.setItem(storageKey, JSON.stringify(projectData));
+        // We notify parent, parent saves to cloud or local via projectStorageService
         if (onStateChange) {
             onStateChange(projectData);
         }
-    }, [projectData, storageKey, onStateChange]);
+    }, [projectData, onStateChange]);
 
+    // `data` may be an updater `(currentChunk, wholeProject) => nextChunk` so
+    // pages can build on the latest stored chunk instead of a render-time
+    // closure (two quick saves from one page must not clobber each other).
     const updateProjectData = useCallback((chunkName, data) => {
-        setProjectData(prev => ({
-            ...prev,
-            [chunkName]: data
-        }));
+        setProjectData(prev => {
+            const resolved = typeof data === 'function' ? data(prev[chunkName], prev) : data;
+            const normalizedData = normalizeProjectSection(chunkName, resolved, prev);
+            const next = { ...prev, [chunkName]: normalizedData };
+            if (chunkName === 'maintenance_repair_data') {
+                next.maintenance_data = normalizedData;
+            }
+            if (chunkName === 'general_info' && normalizedData?.project_name && normalizedData.project_name !== prev.name) {
+                next.name = normalizedData.project_name;
+            }
+            return next;
+        });
     }, []);
 
     const clearProjectData = useCallback(() => {
-        setProjectData({
-            name: 'Bridge_Assessment_01',
-            general_info: {},
-            bridge_data: {},
-            financial_data: {},
-            traffic_data: {},
-            foundation_data: [],
-            substructure_data: [],
-            superstructure_data: [],
-            miscellaneous_data: [],
-            carbon_emission_data: {},
-            maintenance_repair_data: {},
-            recycling_data: {},
-            demolition_data: {},
-            outputs_data: {}
-        });
+        setProjectData(createDefaultProject());
     }, []);
 
     return (
@@ -73,4 +48,3 @@ export const ProjectDataProvider = ({ children, projectId = 'default', initialDa
         </ProjectDataContext.Provider>
     );
 };
-

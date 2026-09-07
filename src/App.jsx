@@ -1,3 +1,6 @@
+/* eslint-disable no-unused-vars */
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom'
 import HomePage from './gui/components/Homepage'
@@ -15,7 +18,16 @@ import Recycling from './gui/components/recycling/Recycling'
 import Demolition from './gui/components/demolition/Demolition'
 import Outputs from './gui/components/outputs/Outputs'
 import { ProjectDataProvider } from './contexts/ProjectDataContext'
+import { buildProjectFromCreation } from './utils/projectCreation'
+import { createDefaultProject, normalizeProjectData } from './utils/projectSchema'
+import { export3psFile } from './utils/projectExport'
+import { account, ID } from './lib/appwrite'
+import { projectStorageService } from './lib/projectStorageService'
+import { loadGuestSession, saveGuestSession, clearGuestSession } from './lib/guestSession'
 import './App.css'
+
+// The HTML report (fonts, KaTeX) only loads when someone opens it.
+const ReportRoute = React.lazy(() => import('./report/ReportRoute.jsx'))
 
 function ProtectedRoute({ isLoggedIn, children }) {
   if (!isLoggedIn) {
@@ -24,15 +36,76 @@ function ProtectedRoute({ isLoggedIn, children }) {
   return children;
 }
 
-function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheckpoints, logs, setLogs, isLocked, setIsLocked, addLog }) {
+function ProjectViewWrapper({ projectData, setProjectData, logs, setLogs, isLocked, setIsLocked, addLog }) {
   const { projectId, nodeId } = useParams();
   const navigate = useNavigate();
   const activeNode = nodeId ? decodeURIComponent(nodeId) : 'General Information';
 
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [saveState, setSaveState] = useState('saved');
+
+  useEffect(() => {
+    if (projectId) {
+      setDataLoaded(false);
+      const loadData = async () => {
+        const saved = await projectStorageService.loadProject(projectId);
+        if (saved) {
+          try {
+            const normalizedSaved = normalizeProjectData(saved);
+            // Only update if it's different to avoid loops if navigate is used
+            if (JSON.stringify(normalizedSaved) !== JSON.stringify(projectData)) {
+              setProjectData(normalizedSaved);
+            }
+          } catch (e) {
+            console.error("Error parsing saved project data", e);
+          }
+        }
+        setDataLoaded(true);
+      };
+      loadData();
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (projectId && projectData && dataLoaded) {
+      setSaveState('saving');
+      const timeoutId = setTimeout(async () => {
+        try {
+          await projectStorageService.saveProject(projectId, projectData);
+          setSaveState('saved');
+        } catch (error) {
+          if (error.message === 'offline') {
+            setSaveState('offline');
+          } else {
+            setSaveState('error');
+          }
+        }
+      }, 500);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [projectData, projectId, dataLoaded]);
+
+  // Handle abrupt closure to ensure debounced data is saved locally
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (projectId && projectData) {
+        const storageKey = `project_data_${projectId}`;
+        const localWrapper = {
+            data: normalizeProjectData({ ...projectData, _lastModified: Date.now() }),
+            sync_status: sessionStorage.getItem('isGuest') === 'true' ? 'synced' : 'pending'
+        };
+        localStorage.setItem(storageKey, JSON.stringify(localWrapper));
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [projectId, projectData]);
+
   const updateProjectData = (section, data) => {
     setProjectData(prev => ({
       ...prev,
-      [section]: data
+      [section]: data,
+      ...(section === 'maintenance_repair_data' ? { maintenance_data: data } : {})
     }))
   }
 
@@ -43,31 +116,10 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
     }
   }
 
-  const handleSaveCheckpoint = (newCheckpoint) => {
-    setCheckpoints(prev => [...prev, newCheckpoint])
-    addLog(`Checkpoint '${newCheckpoint.label}' created.`)
-  }
-
-  const handleDeleteCheckpoint = (index) => {
-    const cp = checkpoints[index]
-    setCheckpoints(prev => prev.filter((_, i) => i !== index))
-    addLog(`Checkpoint '${cp?.label || 'Unknown'}' deleted.`)
-  }
-
   const handleNewProject = (data) => {
     const newProjectId = 'new_project_' + Date.now();
-    setProjectData({
-      ...data,
-      bridge_data: {},
-      financial_data: {},
-      traffic_data: {},
-      construction_work_data: { "Super Structure": { total: 0 }, "grand_total": 0 },
-      carbon_emission_data: {},
-      maintenance_data: {},
-      demolition_data: {},
-      recycling_data: {}
-    })
-    setCheckpoints([])
+    setProjectData(buildProjectFromCreation(data))
+
     setLogs([])
     setIsLocked(false)
     addLog(`New project '${data?.name || 'New Project'}' created.`)
@@ -76,10 +128,9 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
 
   const handleOpenProject = (data) => {
     const openProjectId = data?.id || 'opened_project';
-    setProjectData(data.project || data)
-    if (data.checkpoints) {
-      setCheckpoints(data.checkpoints)
-    }
+    const raw = data.project || data;
+    setProjectData(normalizeProjectData(raw))
+
     if (data.logs) {
       setLogs(data.logs)
     } else {
@@ -96,41 +147,43 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
 
   const handleRenameProject = (newName) => {
     if (projectData) {
-      setProjectData(prev => ({ ...prev, name: newName }))
+      setProjectData(prev => ({
+        ...prev,
+        name: newName,
+        general_info: {
+          ...(prev.general_info || {}),
+          project_name: newName,
+        },
+      }))
       addLog(`Project renamed to '${newName}'.`)
     }
   }
 
-  const handleExportProject = () => {
+  const handleExportProject = async () => {
     if (!projectData) return;
 
-    const exportData = {
-      project: projectData,
-      checkpoints: checkpoints,
-      logs: logs,
-      exportedAt: new Date().toISOString()
-    };
+    try {
+      const normalizedProj = normalizeProjectData(projectData);
+      const blob = await export3psFile(normalizedProj);
+      const url = URL.createObjectURL(blob);
 
-    const storageKey = `lcca_export_${projectData.name || 'unnamed'}`;
-    localStorage.setItem(storageKey, JSON.stringify(exportData));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${projectData.name || 'project'}.3ps`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${projectData.name || 'project'}_export.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    addLog(`Project exported and saved to local storage as '${storageKey}'.`);
+      addLog(`Project exported successfully as '${projectData.name || 'project'}.3ps'.`);
+    } catch (err) {
+      console.error("Failed to export project:", err);
+      alert(`Export failed: ${err.message || err}`);
+    }
   };
 
   const CONTENT_MAP = {
-    'General Information': <ProjectInformationPlaceholder key="general" data={projectData.bridge_data} onUpdate={(d) => updateProjectData('bridge_data', d)} />,
+    'General Information': <ProjectInformationPlaceholder key="general" />,
     'Bridge Data': <BridgeData key="bridge" data={projectData.bridge_data} onUpdate={(d) => updateProjectData('bridge_data', d)} />,
     'Financial Data': <FinancialData key="financial" data={projectData.financial_data} onUpdate={(d) => updateProjectData('financial_data', d)} />,
     'Traffic Data': <TrafficData key="traffic" data={projectData.traffic_data} onUpdate={(d) => updateProjectData('traffic_data', d)} />,
@@ -139,17 +192,21 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
     'Sub Structure': <ConstructionWorkData key="cw_sub" data={projectData.construction_work_data} onUpdate={(d) => updateProjectData('construction_work_data', d)} initialTab="SubStructure" setActiveNode={handleSetActiveNode} />,
     'Super Structure': <ConstructionWorkData key="cw_super" data={projectData.construction_work_data} onUpdate={(d) => updateProjectData('construction_work_data', d)} initialTab="SuperStructure" setActiveNode={handleSetActiveNode} />,
     'Miscellaneous': <ConstructionWorkData key="cw_misc" data={projectData.construction_work_data} onUpdate={(d) => updateProjectData('construction_work_data', d)} initialTab="Miscellaneous" setActiveNode={handleSetActiveNode} />,
-    'Carbon Emission Data': <CarbonEmissionContainer key="ce_main" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} />,
-    'Material Emissions': <CarbonEmissionContainer key="ce_material" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Material" />,
-    'Transportation Emissions': <CarbonEmissionContainer key="ce_transport" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Transportation" />,
-    'Machinery Emissions': <CarbonEmissionContainer key="ce_machinery" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Machinery" />,
-    'Traffic Diversion Emissions': <CarbonEmissionContainer key="ce_traffic" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Traffic" />,
-    'Social Cost of Carbon': <CarbonEmissionContainer key="ce_social" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="SocialCost" />,
+    'Carbon Emissions Data': <CarbonEmissionContainer key="ce_main" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} setActiveNode={handleSetActiveNode} />,
+    'Carbon Emission Data': <CarbonEmissionContainer key="ce_main_legacy" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} setActiveNode={handleSetActiveNode} />,
+    'Social Cost of Carbon': <CarbonEmissionContainer key="ce_social" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="SocialCost" setActiveNode={handleSetActiveNode} />,
+    'Material Emissions': <CarbonEmissionContainer key="ce_material" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Material" setActiveNode={handleSetActiveNode} />,
+    'Transportation Emissions': <CarbonEmissionContainer key="ce_transport" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Transportation" setActiveNode={handleSetActiveNode} />,
+    'Machinery/Equipment Emissions': <CarbonEmissionContainer key="ce_machinery" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Machinery" setActiveNode={handleSetActiveNode} />,
+    'Machinery Emissions': <CarbonEmissionContainer key="ce_machinery_legacy" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Machinery" setActiveNode={handleSetActiveNode} />,
+    'Traffic Rerouting Emissions': <CarbonEmissionContainer key="ce_traffic" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Traffic" setActiveNode={handleSetActiveNode} />,
+    'Traffic Diversion Emissions': <CarbonEmissionContainer key="ce_traffic_legacy" data={projectData.carbon_emission_data} onUpdate={(d) => updateProjectData('carbon_emission_data', d)} initialTab="Traffic" setActiveNode={handleSetActiveNode} />,
     'Maintenance and Repair': <MaintenanceAndRepair key="maintenance" addLog={addLog} />,
     'Recycling': <Recycling key="recycling" addLog={addLog} />,
     'Demolition': <Demolition key="demolition" addLog={addLog} />,
     'Logs': <Logs key="logs" />,
     'Outputs': <Outputs key="outputs" addLog={addLog} />,
+    'Results': <Outputs key="outputs" addLog={addLog} />,
   }
 
   const contentKey = Object.keys(CONTENT_MAP).find(k => k.toLowerCase() === activeNode.toLowerCase()) || activeNode;
@@ -161,6 +218,16 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
       return { ...prev, ...data };
     });
   }, [setProjectData]);
+
+  if (!dataLoaded) {
+    return (
+      <div className="d-flex justify-content-center align-items-center" style={{ height: '100vh', backgroundColor: 'var(--app-bg-main)' }}>
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading project data...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ProjectDataProvider
@@ -177,9 +244,6 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
           addLog("Project closed. Returning to home.");
           navigate('/');
         }}
-        checkpoints={checkpoints}
-        onSaveCheckpoint={handleSaveCheckpoint}
-        onDeleteCheckpoint={handleDeleteCheckpoint}
         onNewProject={handleNewProject}
         onOpenProject={handleOpenProject}
         addLog={addLog}
@@ -189,12 +253,14 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
         projectData={projectData}
         onRenameProject={handleRenameProject}
         onExportProject={handleExportProject}
+        saveState={saveState}
       >
         {content ? React.cloneElement(content, {
-          checkpoints,
+          key: activeNode,
           logs,
           onClearLogs: handleClearLogs,
           isLocked: isLocked,
+          setIsLocked,
           projectData: projectData
         }) : <div className="p-4 text-muted fst-italic">Select a section from the sidebar to begin.</div>}
       </ProjectLayout>
@@ -205,38 +271,65 @@ function ProjectViewWrapper({ projectData, setProjectData, checkpoints, setCheck
 function App() {
   const navigate = useNavigate();
 
-  const [isLoggedIn, setIsLoggedIn] = useState(() => sessionStorage.getItem('isLoggedIn') === 'true')
-  const [projectData, setProjectData] = useState({
-    name: 'Bridge_Assessment_01',
-    bridge_data: {},
-    financial_data: {},
-    traffic_data: {},
-    construction_work_data: { "Super Structure": { total: 0 }, "grand_total": 0 },
-    carbon_emission_data: {},
-    maintenance_data: {},
-    demolition_data: {},
-    recycling_data: {}
-  })
-  const [checkpoints, setCheckpoints] = useState(() => {
-    const saved = localStorage.getItem('checkpoints')
-    return saved ? JSON.parse(saved) : []
-  })
+  // An active guest on this machine resumes straight to the home page instead
+  // of the auth page; logging out (profile menu) clears the marker.
+  const resumedGuest = loadGuestSession();
+  const [isLoggedIn, setIsLoggedIn] = useState(() => sessionStorage.getItem('isLoggedIn') === 'true' || !!resumedGuest)
+  const [projectData, setProjectData] = useState(() => createDefaultProject())
+
   const [logs, setLogs] = useState(() => {
     const saved = localStorage.getItem('logs')
     return saved ? JSON.parse(saved) : []
   })
-  const [userName, setUserName] = useState(() => sessionStorage.getItem('userName') || '')
+  const [userName, setUserName] = useState(() => sessionStorage.getItem('userName') || resumedGuest?.name || '')
   const [isLocked, setIsLocked] = useState(false)
 
   useEffect(() => {
     // Clear legacy localStorage keys to ensure new sessions launch on the Login page
     localStorage.removeItem('isLoggedIn');
     localStorage.removeItem('userName');
+
+    // Resuming from the guest marker: stamp this tab's session as a guest so
+    // storage/sync code (sessionStorage 'isGuest' checks) behaves as before.
+    if (sessionStorage.getItem('isLoggedIn') !== 'true' && loadGuestSession()) {
+      sessionStorage.setItem('isGuest', 'true');
+    }
+
+    // Check for active Appwrite session on mount if not logged in
+    const checkSession = async () => {
+      try {
+        const user = await account.get();
+        if (user) {
+           setIsLoggedIn(true);
+           setUserName(user.name || user.email.split('@')[0]);
+           sessionStorage.setItem('isGuest', 'false');
+        }
+      } catch (e) {
+        // No active session
+      }
+    };
+    if (!isLoggedIn) checkSession();
+
+    // Offline sync hooks
+    const handleOnline = () => {
+      console.log("Internet restored. Triggering background sync...");
+      projectStorageService.syncPendingProjects();
+    };
+    window.addEventListener('online', handleOnline);
+
+    const syncInterval = setInterval(() => {
+      projectStorageService.syncPendingProjects();
+    }, 60000); // 60 seconds
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      clearInterval(syncInterval);
+    };
   }, []);
 
   useEffect(() => { sessionStorage.setItem('isLoggedIn', isLoggedIn); }, [isLoggedIn]);
   useEffect(() => { sessionStorage.setItem('userName', userName); }, [userName]);
-  useEffect(() => { localStorage.setItem('checkpoints', JSON.stringify(checkpoints)); }, [checkpoints]);
+
   useEffect(() => { localStorage.setItem('logs', JSON.stringify(logs)); }, [logs]);
 
   const [userSettings, setUserSettings] = useState(() => {
@@ -396,35 +489,106 @@ function App() {
   const handleLogin = (isGuest = false, name = "Admin") => {
     setIsLoggedIn(true)
     setUserName(name)
+    sessionStorage.setItem('isGuest', isGuest)
+    if (isGuest) saveGuestSession(name)
     addLog(isGuest ? `Guest user '${name}' logged in.` : `User '${name}' logged in.`)
     navigate('/')
   }
 
-  const handleAdminLogin = (credentials) => {
-    const namePart = credentials.email ? credentials.email.split('@')[0] : 'Admin';
-    handleLogin(false, namePart);
+  const handleLogout = async () => {
+    const isGuest = sessionStorage.getItem('isGuest') === 'true';
+    if (!isGuest) {
+      try {
+        await account.deleteSession('current');
+      } catch (e) {
+        console.error('Logout error', e);
+      }
+    }
+    clearGuestSession();
+    setIsLoggedIn(false);
+    sessionStorage.removeItem('isGuest');
+    addLog('Logged out successfully.');
+    navigate('/login');
   };
 
-  const handleProjectOpen = (projectId = 'default_project', projectName = 'Default Project') => {
-    navigate(`/project/${projectId}/General Information`)
-    addLog(`Project '${projectName}' opened successfully.`)
-  }
+  const handleAdminLogin = async (credentials) => {
+    try {
+        if (credentials.action === 'signup') {
+            await account.create(ID.unique(), credentials.email, credentials.password, credentials.name);
+            await account.createEmailPasswordSession(credentials.email, credentials.password);
+            const user = await account.get();
+            handleLogin(false, user.name || credentials.email.split('@')[0]);
+        } else {
+            await account.createEmailPasswordSession(credentials.email, credentials.password);
+            const user = await account.get();
+        }
+    } catch (e) {
+        console.error("Auth error:", e);
+        throw e; // Throw to be handled by Loginpage
+    }
+  };
+
+  const handleGoogleLogin = () => {
+    // Resolve against the Vite base so redirects work under subdirectory
+    // hosting (e.g. /3psLCCA-web/ on GitHub Pages), not just the origin root.
+    const appBase = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+    account.createOAuth2Session(
+        'google',
+        appBase, // Success URL (goes back to Homepage, which triggers checkSession)
+        `${appBase}login` // Failure URL
+    );
+  };
+
+  const handleProjectCreate = (creationData) => {
+    const newProjectId = 'new_project_' + Date.now();
+    setProjectData(buildProjectFromCreation(creationData));
+    setLogs([]);
+    setIsLocked(false);
+    addLog(`New project '${creationData?.name || 'New Project'}' created.`);
+    navigate(`/project/${newProjectId}/General Information`);
+    return { id: newProjectId, name: creationData.name };
+  };
+
+  const handleProjectOpen = async (projectId = 'default_project', projectName = 'Default Project') => {
+    const saved = await projectStorageService.loadProject(projectId);
+    if (saved) {
+      try {
+        setProjectData(normalizeProjectData(saved));
+      } catch (e) {
+        console.error('Failed to load project', e);
+      }
+    } else if (projectName) {
+      setProjectData(prev => normalizeProjectData({ ...prev, name: projectName }));
+    }
+    navigate(`/project/${projectId}/General Information`);
+    addLog(`Project '${projectName}' opened successfully.`);
+  };
 
   return (
     <Routes>
       <Route path="/login" element={
-        isLoggedIn ? <Navigate to="/" replace /> : <Loginpage onLogin={handleAdminLogin} onGuestLogin={(name) => handleLogin(true, name || 'Guest')} />
+        isLoggedIn ? <Navigate to="/" replace /> : <Loginpage onLogin={handleAdminLogin} onGuestLogin={(name) => handleLogin(true, name || 'Guest')} onGoogleLogin={handleGoogleLogin} />
       } />
 
       <Route path="/" element={
         <ProtectedRoute isLoggedIn={isLoggedIn}>
           <HomePage
             onProjectOpen={handleProjectOpen}
+            onProjectCreate={handleProjectCreate}
             userName={userName}
             isDarkMode={isDarkMode}
             userSettings={userSettings}
             setUserSettings={setUserSettings}
+            onLogout={handleLogout}
           />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/project/:projectId/report" element={
+        <ProtectedRoute isLoggedIn={isLoggedIn}>
+          <React.Suspense fallback={<div className="p-5 text-center">Loading report…</div>}>
+            <ReportRoute />
+          </React.Suspense>
         </ProtectedRoute>
       } />
 
@@ -433,8 +597,6 @@ function App() {
           <ProjectViewWrapper
             projectData={projectData}
             setProjectData={setProjectData}
-            checkpoints={checkpoints}
-            setCheckpoints={setCheckpoints}
             logs={logs}
             setLogs={setLogs}
             isLocked={isLocked}

@@ -1,334 +1,58 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useProjectData } from '../../../contexts/ProjectDataContext';
-import { Container, Row, Col, Card, Button, Form, Table, Badge } from 'react-bootstrap';
-import * as d3 from 'd3';
+import { Button, Form, ProgressBar } from 'react-bootstrap';
 import JSZip from 'jszip';
 import pako from 'pako';
-import { FaExclamationTriangle, FaCheckCircle, FaFileDownload, FaFileUpload } from 'react-icons/fa';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
-import { COLORS, PILLAR_COLORS, STAGE_COLORS } from './lccColors';
-import { BREAKDOWN_STAGES, STAGE_DEFS, computeStagePillarTotals } from './breakdownStages';
+import { FaCheckCircle, FaFileUpload } from 'react-icons/fa';
 import { computeAllSummaries } from './lifecycleSummary';
-import { generateFullReport } from './reportGenerator';
+import { generateReport } from './reportEngine';
 import ReportSectionModal from './ReportSectionModal';
+import ReportActions from './ReportActions.jsx';
+import ResultsView from './ResultsView';
+import { buildCalculationProjectInputs } from '../../../utils/projectDerivations';
+import {
+    calculateLcca,
+    getLccaEngineDescription,
+    getLccaEngineMode,
+    initializeLccaEngine,
+} from '../../../lib/lccaApi';
 
-const D3PieChart = ({ data }) => {
-    const svgRef = useRef();
-    const tooltipRef = useRef();
+// The AI assistant only exists in builds made with VITE_AI_ENABLED=true. The
+// comparison must stay inline (not a shared constant) so Vite folds it to a
+// literal and drops the dynamic import — and with it the whole src/lib/ai
+// package — from flag-off bundles (enforced by tests/ai/bundleExclusion.test.js).
+const AI_ENABLED = import.meta.env.VITE_AI_ENABLED === 'true';
+const AiCueLazy = AI_ENABLED ? React.lazy(() => import('../ai/AiResultsCue.jsx')) : null;
+const AiCueSlot = (props) => (AiCueLazy ? (
+    <React.Suspense fallback={null}><AiCueLazy {...props} /></React.Suspense>
+) : null);
 
-    useEffect(() => {
-        if (!data || data.length === 0) return;
+const Outputs = ({ addLog, navTrigger, setIsLocked }) => {
+    const { projectData, updateProjectData } = useProjectData();
+    const navigate = useNavigate();
+    const { projectId } = useParams();
 
-        // Increased width and adjusted layout to prevent legend overlap
-        const w = 520;
-        const h = 300;
-        const margin = 20;
-        const radius = Math.min(w, h) / 2 - margin;
-
-        const svgEl = d3.select(svgRef.current);
-        svgEl.selectAll("*").remove();
-
-        const tooltip = d3.select(tooltipRef.current);
-
-        const svg = svgEl
-            .attr("width", "100%")
-            .attr("height", "100%")
-            .attr("viewBox", `0 0 ${w} ${h}`)
-            .append("g")
-            // Shift center to the left to make room for legend
-            .attr("transform", `translate(${w / 2 - 50},${h / 2})`);
-
-        const pie = d3.pie()
-            .value(d => d.value)
-            .sort(null);
-
-        const arc = d3.arc()
-            .innerRadius(radius * 0.5)
-            .outerRadius(radius);
-
-        const arcs = svg.selectAll("arc")
-            .data(pie(data))
-            .enter()
-            .append("g");
-
-        arcs.append("path")
-            .attr("d", arc)
-            .attr("fill", d => d.data.color)
-            .attr("stroke", "var(--app-bg-card)")
-            .style("stroke-width", "2px")
-            .style("cursor", "pointer")
-            .style("opacity", 0.9)
-            .on("mouseover", function(event, d) {
-                d3.select(this)
-                    .transition().duration(200)
-                    .style("opacity", 1)
-                    .attr("d", d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 1.05));
-                
-                tooltip.style("opacity", 1)
-                    .html(`<strong>${d.data.name}</strong><br/>Value: ${d.value}`)
-                    .style("left", (event.pageX + 10) + "px")
-                    .style("top", (event.pageY - 28) + "px");
-            })
-            .on("mouseout", function(event, d) {
-                d3.select(this)
-                    .transition().duration(200)
-                    .style("opacity", 0.9)
-                    .attr("d", arc);
-                
-                tooltip.style("opacity", 0);
-            })
-            .transition()
-            .duration(800)
-            .attrTween("d", function(d) {
-                const i = d3.interpolate({ startAngle: 0, endAngle: 0 }, d);
-                return function(t) { return arc(i(t)); };
-            });
-            
-        // Add legend with more horizontal spacing
-        const legend = svg.append("g")
-            .attr("transform", `translate(${radius + 30}, -${radius * 0.5})`);
-            
-        data.forEach((d, i) => {
-            const legendRow = legend.append("g")
-                .attr("transform", `translate(0, ${i * 28})`);
-                
-            legendRow.append("rect")
-                .attr("width", 12)
-                .attr("height", 12)
-                .attr("rx", 2)
-                .attr("fill", d.color);
-                
-            legendRow.append("text")
-                .attr("x", 20)
-                .attr("y", 11)
-                .attr("text-anchor", "start")
-                .style("fill", "var(--app-text-primary)")
-                .style("font-size", "12px")
-                .style("font-weight", "500")
-                .text(d.name);
-        });
-
-    }, [data]);
-
-    return (
-        <div className="position-relative w-100 h-100">
-            <svg ref={svgRef}></svg>
-            <div 
-                ref={tooltipRef} 
-                style={{
-                    position: 'absolute',
-                    opacity: 0,
-                    backgroundColor: 'var(--app-bg-card)',
-                    border: '1px solid var(--app-border-mid)',
-                    color: 'var(--app-text-primary)',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    pointerEvents: 'none',
-                    fontSize: '12px',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                    transition: 'opacity 0.2s',
-                    zIndex: 10
-                }}
-            ></div>
-        </div>
-    );
-};
-
-const D3BarChart = ({ data }) => {
-    const svgRef = useRef();
-    const tooltipRef = useRef();
-
-    useEffect(() => {
-        if (!data || data.length === 0) return;
-
-        const w = 450;
-        const h = 300;
-        const margin = { top: 20, right: 20, bottom: 60, left: 50 };
-        const width = w - margin.left - margin.right;
-        const height = h - margin.top - margin.bottom;
-
-        const svgEl = d3.select(svgRef.current);
-        svgEl.selectAll("*").remove();
-
-        const tooltip = d3.select(tooltipRef.current);
-
-        const svg = svgEl
-            .attr("width", "100%")
-            .attr("height", "100%")
-            .attr("viewBox", `0 0 ${w} ${h}`)
-            .append("g")
-            .attr("transform", `translate(${margin.left},${margin.top})`);
-
-        const x = d3.scaleBand()
-            .domain(data.map(d => d.name))
-            .range([0, width])
-            .padding(0.3);
-
-        const y = d3.scaleLinear()
-            .domain([0, d3.max(data, d => d.value) * 1.1]) // add some top padding
-            .nice()
-            .range([height, 0]);
-
-        // Add grid lines
-        svg.append("g")
-            .attr("class", "grid")
-            .call(d3.axisLeft(y)
-                .tickSize(-width)
-                .tickFormat("")
-            )
-            .selectAll("line")
-            .style("stroke", "var(--app-border-light)")
-            .style("stroke-dasharray", "3 3");
-            
-        svg.selectAll(".domain").remove(); // remove axis borders if desired
-
-        svg.append("g")
-            .attr("transform", `translate(0,${height})`)
-            .call(d3.axisBottom(x))
-            .selectAll("text")
-            .style("fill", "var(--app-text-muted)")
-            .style("font-size", "11px")
-            .attr("transform", "rotate(-25)")
-            .style("text-anchor", "end");
-
-        svg.append("g")
-            .call(d3.axisLeft(y).ticks(5))
-            .selectAll("text")
-            .style("fill", "var(--app-text-muted)")
-            .style("font-size", "11px");
-
-        // Add Bars
-        svg.selectAll(".bar")
-            .data(data)
-            .enter()
-            .append("rect")
-            .attr("class", "bar")
-            .attr("x", d => x(d.name))
-            .attr("y", y(0))
-            .attr("width", x.bandwidth())
-            .attr("height", 0)
-            .attr("fill", d => d.color || 'var(--app-primary-accent)')
-            .attr("rx", 4)
-            .attr("ry", 4)
-            .style("cursor", "pointer")
-            .on("mouseover", function(event, d) {
-                d3.select(this)
-                    .transition().duration(200)
-                    .attr("opacity", 0.8);
-                    
-                tooltip.style("opacity", 1)
-                    .html(`<strong>${d.name}</strong><br/>Value: ${d.value}`)
-                    .style("left", (event.pageX + 10) + "px")
-                    .style("top", (event.pageY - 28) + "px");
-            })
-            .on("mouseout", function(event, d) {
-                d3.select(this)
-                    .transition().duration(200)
-                    .attr("opacity", 1);
-                    
-                tooltip.style("opacity", 0);
-            })
-            .transition()
-            .duration(800)
-            .attr("y", d => y(d.value))
-            .attr("height", d => height - y(d.value));
-
-    }, [data]);
-
-    return (
-        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-            <svg ref={svgRef}></svg>
-            <div 
-                ref={tooltipRef} 
-                style={{
-                    position: 'absolute',
-                    opacity: 0,
-                    backgroundColor: 'var(--app-bg-card)',
-                    border: '1px solid var(--app-border-mid)',
-                    color: 'var(--app-text-primary)',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    pointerEvents: 'none',
-                    fontSize: '12px',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                    transition: 'opacity 0.2s',
-                    zIndex: 10
-                }}
-            ></div>
-        </div>
-    );
-};
-
-import { runLccaCalculation } from './calculationEngine';
-
-const Outputs = ({ addLog, isLocked, navTrigger }) => {
-    const { projectData } = useProjectData();
-
-    // Helper to calculate totals from structured section list (Foundation, Sub, Super, Misc)
-    const getSectionsTotal = (sections) => {
-        if (!sections || !Array.isArray(sections)) return 0;
-        return sections.reduce((sum, sec) => {
-            if (!sec.rows || !Array.isArray(sec.rows)) return sum;
-            return sum + sec.rows.reduce((s, r) => s + (parseFloat(r.rate) || 0) * (parseFloat(r.qty) || 0), 0);
-        }, 0);
-    };
-
-    // Helper to calculate scrap value from Recycling included list
-    const getRecyclingTotal = (recyclingData) => {
-        if (!recyclingData || !recyclingData.included || !Array.isArray(recyclingData.included)) return 0;
-        return recyclingData.included.reduce((sum, item) => {
-            const val = parseFloat(String(item.recoveredValue).replace(/,/g, '')) || 0;
-            return sum + val;
-        }, 0);
-    };
-
-    // Dynamically derive projectInputs from context
-    const derivedProjectInputs = React.useMemo(() => {
-        if (!projectData) return null;
-        
-        const construction_work_data = {
-            "Foundation": { total: getSectionsTotal(projectData.foundation_data) },
-            "Sub Structure": { total: getSectionsTotal(projectData.substructure_data) },
-            "Super Structure": { total: getSectionsTotal(projectData.superstructure_data) },
-            "Miscellaneous": { total: getSectionsTotal(projectData.miscellaneous_data) },
-            grand_total: getSectionsTotal(projectData.foundation_data) +
-                        getSectionsTotal(projectData.substructure_data) +
-                        getSectionsTotal(projectData.superstructure_data) +
-                        getSectionsTotal(projectData.miscellaneous_data)
-        };
-
-        const recycling_data = {
-            ...projectData.recycling_data,
-            total_recovered_value: getRecyclingTotal(projectData.recycling_data)
-        };
-
-        const demolition_data = {
-            ...projectData.demolition_data,
-            demolition_cost_pct: parseFloat(projectData.demolition_data?.demolition_cost) || 0
-        };
-
-        return {
-            bridge_data: projectData.bridge_data || {},
-            financial_data: projectData.financial_data || {},
-            traffic_data: projectData.traffic_data || {},
-            construction_work_data,
-            carbon_emission_data: projectData.carbon_emission_data || {},
-            maintenance_data: projectData.maintenance_repair_data || {},
-            demolition_data,
-            recycling_data
-        };
+    const projectInputs = React.useMemo(() => {
+        return projectData ? buildCalculationProjectInputs(projectData) : null;
     }, [projectData]);
 
-    const projectInputs = derivedProjectInputs;
-
     const [view, setView] = useState('validation'); // 'validation' or 'results'
-    const [analysisPeriod, setAnalysisPeriod] = useState(100);
+    const [analysisPeriod, setAnalysisPeriod] = useState(
+        () => parseInt(projectData?.bridge_data?.analysis_period) || 0
+    );
     const [uploadedResults, setUploadedResults] = useState(null);
+    const [calculationResults, setCalculationResults] = useState(() => projectData?.outputs_data?.results || null);
     const [fileError, setFileError] = useState(null);
     const [computedData, setComputedData] = useState(null);
     const [uploadedFileName, setUploadedFileName] = useState(null);
+    const [isCalculating, setIsCalculating] = useState(false);
+    const [calculationPhase, setCalculationPhase] = useState('idle');
+    const [engineMetadata, setEngineMetadata] = useState(
+        () => projectData?.outputs_data?.engine || {}
+    );
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+    const [reportProgress, setReportProgress] = useState(null); // { message, percent }
     const [showReportModal, setShowReportModal] = useState(false);
 
     const reportRef = useRef();
@@ -338,13 +62,12 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
     const LCCA_MAGIC = [0x4C, 0x43, 0x43, 0x41]; // "LCCA"
 
     useEffect(() => {
-        if (projectData?.bridge_data?.design_life) {
-            setAnalysisPeriod(parseInt(projectData.bridge_data.design_life) || 100);
-        }
-    }, [projectData?.bridge_data?.design_life]);
+        // Keep the analysis period aligned when a different project is loaded.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setAnalysisPeriod(parseInt(projectData?.bridge_data?.analysis_period) || 0);
+    }, [projectData?.bridge_data?.analysis_period]);
 
-    // Use live data if no file is uploaded
-    const resultsToUse = uploadedResults || (projectInputs && runLccaCalculation(projectInputs));
+    const resultsToUse = uploadedResults || calculationResults;
 
     const decodeLcca = (uint8) => {
         // Check for "LCCA" magic header
@@ -366,17 +89,20 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
 
     useEffect(() => {
         // Reset to validation view whenever a navigation trigger occurs
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setView('validation');
     }, [navTrigger]);
 
     useEffect(() => {
-        // Process either uploaded results or live inputs to ensure summary data is available
-        const dataToProcess = uploadedResults || (projectInputs ? runLccaCalculation(projectInputs) : null);
-        if (dataToProcess) {
-            const summaries = computeAllSummaries(dataToProcess);
+        if (resultsToUse) {
+            const summaries = computeAllSummaries(resultsToUse);
+            // Results can be restored from saved project data while mounted.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setComputedData(summaries);
+        } else {
+            setComputedData(null);
         }
-    }, [projectInputs, uploadedResults]);
+    }, [resultsToUse]);
 
     const handleFileUpload = async (event) => {
         const file = event.target.files[0];
@@ -437,23 +163,99 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
         reader.readAsArrayBuffer(file);
     };
 
-    const handleProceed = () => {
-        if (!uploadedResults && (!projectInputs || !projectInputs.bridge_data?.bridge_name)) {
+    const handleProceed = async () => {
+        if (!uploadedResults && !projectInputs) {
             setFileError("Please enter project data or upload a .3psLCCA archive first.");
             return;
         }
 
-        addLog("Running LCCA calculation engine...");
-        
-        // Ensure data is fresh
-        const results = uploadedResults || runLccaCalculation(projectInputs);
-        const summaries = computeAllSummaries(results);
-        setComputedData(summaries);
+        if (uploadedResults) {
+            const summaries = computeAllSummaries(uploadedResults);
+            setComputedData(summaries);
+            setView('results');
+            addLog("Uploaded calculation results loaded.");
+            return;
+        }
 
-        setTimeout(() => {
+        setIsCalculating(true);
+        setCalculationPhase('loading');
+        setFileError(null);
+
+        try {
+            const initialized = await initializeLccaEngine((message) => addLog(message));
+            const engineDescription = await getLccaEngineDescription();
+            addLog(`Using the ${engineDescription}.`);
+            const nextEngineMetadata = {
+                source: getLccaEngineMode(),
+                ...(initialized?.engineVersion ? { coreVersion: initialized.engineVersion } : {}),
+                ...(initialized?.pyodideVersion ? { pyodideVersion: initialized.pyodideVersion } : {}),
+            };
+            setEngineMetadata(nextEngineMetadata);
+            setCalculationPhase('calculating');
+            // Desktop parity: the recycling total and the social cost of
+            // carbon are resolved fresh at calculation time (from material
+            // rows and the saved Ricke parameters), like desktop's live
+            // widgets do — never trusted from possibly-stale stored values.
+            const { prepareProjectForCalculation } = await import('../../../utils/calculationPrep.js');
+            const prepared = await prepareProjectForCalculation(projectData);
+            if (prepared.recycling) {
+                updateProjectData('recycling_data', prepared.recycling);
+                addLog(`Recycling: recovered value ${Math.round(prepared.recycling.total_recovered_value).toLocaleString('en-IN')} from ${prepared.recycling.included_count} of ${prepared.recycling.total_count} materials.`);
+            }
+            if (prepared.socialCost) {
+                updateProjectData('carbon_emission_data', prepared.project.carbon_emission_data);
+                addLog(`Social cost of carbon resolved: ${prepared.socialCost.cost.toFixed(3)} per kgCO₂e.`);
+            }
+            addLog("Running lifecycle cost calculation...");
+            // Send the DERIVED inputs, not the raw project: the derivation
+            // computes desktop-identical totals (material kgCO₂e, recycling,
+            // construction sums); the adapter's raw-row fallback does not.
+            const response = await calculateLcca({
+                project: buildCalculationProjectInputs(prepared.project),
+                analysisPeriodYears: analysisPeriod,
+            });
+
+            if (response.status !== 'success') {
+                const errors = response.validation?.errors || ['Calculation failed.'];
+                setFileError(errors.join(' '));
+                addLog(`Calculation failed: ${errors.join(' ')}`);
+                return;
+            }
+
+            const summaries = computeAllSummaries(response.results);
+            const calculatedAt = new Date().toISOString();
+            const completedEngineMetadata = {
+                ...nextEngineMetadata,
+                calculatedAt,
+            };
+            setEngineMetadata(completedEngineMetadata);
+            setCalculationResults(response.results);
+            setComputedData(summaries);
+            updateProjectData('outputs_data', {
+                results: response.results,
+                computed: response.computed || {},
+                validation: response.validation || { errors: [], warnings: [] },
+                analysis_period_years: analysisPeriod,
+                calculated_at: calculatedAt,
+                source: getLccaEngineMode(),
+                engine: completedEngineMetadata,
+            });
             setView('results');
             addLog("Calculation completed successfully.");
-        }, 800);
+            // Lock the inputs only now that a calculation has actually
+            // succeeded; a failed run leaves everything editable.
+            if (setIsLocked) {
+                setIsLocked(true);
+                addLog("Project locked to keep inputs and results in step. Use the lock icon to edit again.");
+            }
+        } catch (err) {
+            const message = `Calculation engine unavailable or failed: ${err.message}`;
+            setFileError(message);
+            addLog(message);
+        } finally {
+            setIsCalculating(false);
+            setCalculationPhase('idle');
+        }
     };
 
     const handleDownloadReport = () => {
@@ -461,34 +263,77 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
             addLog("Error: Calculation results are not ready yet. Please click 'Proceed' or wait for data to load.");
             return;
         }
+        // Start the heavy one-time downloads (Python runtime, TeX engine)
+        // while the user is still choosing sections in the modal.
+        import('./latexReportEngine.js')
+            .then(({ warmUpLatexReport }) => warmUpLatexReport())
+            .catch(() => {});
         setShowReportModal(true);
     };
 
     const handleConfirmReport = async (selections) => {
         setShowReportModal(false);
         if (isGeneratingPdf) return;
-        
+
         setIsGeneratingPdf(true);
         addLog("Preparing professional LCCA report...");
         try {
             const charts = [pieChartRef, barChartRef];
-            // Use resultsToUse which correctly handles both uploaded and live calculated results
             const resultsForReport = resultsToUse;
-            
-            await generateFullReport(
-                projectInputs, 
-                resultsForReport, 
-                computedData, 
-                addLog, 
-                charts, 
+            if (!resultsForReport) {
+                throw new Error("Calculation results are not ready. Please run the backend calculation first.");
+            }
+
+            // Preferred engine: the desktop app's own LaTeX pipeline running
+            // fully in the browser (desktop-identical PDF). jsPDF remains the
+            // automatic fallback if WASM is unavailable or the compile fails.
+            try {
+                const { generateLatexReport, downloadPdf, progressPercent } = await import('./latexReportEngine.js');
+                let lastPercent = 0;
+                setReportProgress({ message: 'Starting…', percent: 0 });
+                const { pdf, fileName, plotError } = await generateLatexReport({
+                    projectData,
+                    results: resultsForReport,
+                    selections,
+                    onProgress: (message) => {
+                        addLog(message);
+                        const percent = progressPercent(message);
+                        if (percent !== null) lastPercent = percent;
+                        setReportProgress({ message, percent: lastPercent });
+                    },
+                });
+                if (plotError) addLog(`Warning: report plots unavailable (${plotError}).`);
+                setReportProgress({ message: 'Report ready — downloading…', percent: 100 });
+                downloadPdf(pdf, fileName);
+                addLog(`LaTeX report ready: ${fileName} (${(pdf.length / 1024 / 1024).toFixed(2)} MB).`);
+                return;
+            } catch (latexError) {
+                console.error("LaTeX report engine failed, falling back to jsPDF:", latexError);
+                addLog(`LaTeX engine unavailable (${latexError.message}). Generating fallback-layout report instead...`);
+                setReportProgress(null);
+            }
+
+            await generateReport({
+                projectInputs,
+                results: resultsForReport,
+                computedData,
+                addLog,
+                chartRefs: charts,
                 uploadedFileName,
-                selections
-            );
+                selections,
+                calculationMetadata: {
+                    source: projectData?.outputs_data?.source || getLccaEngineMode(),
+                    calculated_at: projectData?.outputs_data?.calculated_at || engineMetadata.calculatedAt,
+                    ...projectData?.outputs_data?.engine,
+                    ...engineMetadata,
+                },
+            });
         } catch (err) {
             console.error("PDF Export Error:", err);
             addLog(`Error: ${err.message}`);
         } finally {
             setIsGeneratingPdf(false);
+            setReportProgress(null);
         }
     };
 
@@ -497,13 +342,12 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
             <h2 className="mb-4" style={{ color: 'var(--app-primary-accent)' }}>Outputs</h2>
             
             <Form.Group className="mb-4">
-                <Form.Label className="fw-bold" style={{ color: 'var(--app-text-primary)' }}>Project Results Data (.3psLCCAFile) *</Form.Label>
-                <div className="mb-2" style={{ fontSize: '0.85rem', color: 'var(--app-text-secondary)' }}>Upload a previously calculated project file to view its outputs.</div>
+                <Form.Label className="fw-bold" style={{ color: 'var(--app-text-primary)' }}>Previously calculated results file (.3psLCCAFile) — optional</Form.Label>
+                <div className="mb-2" style={{ fontSize: '0.85rem', color: 'var(--app-text-secondary)' }}>Only needed to view outputs from an earlier calculation. Otherwise proceed with the calculation below.</div>
                 <div className="d-flex gap-3 align-items-center">
                     <Button 
                         variant="outline-secondary" 
                         onClick={() => fileInputRef.current.click()}
-                        disabled={isLocked}
                         style={{ borderColor: 'var(--app-border-mid)', color: 'var(--app-text-primary)' }}
                     >
                         <FaFileUpload className="me-2" /> {uploadedResults ? "Change File" : "Choose File"}
@@ -531,201 +375,100 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
                 />
             </Form.Group>
 
+            <div
+                className="mb-2"
+                style={{ fontSize: '0.82rem', color: 'var(--app-text-secondary)' }}
+                data-testid="lcca-engine-indicator"
+            >
+                Calculation engine: {getLccaEngineMode() === 'browser' ? 'In-browser (3psLCCA-core via CDN)' : 'FastAPI backend'}
+                {engineMetadata.coreVersion && ` | Core ${engineMetadata.coreVersion}`}
+            </div>
+
             <Button 
                 className="w-100 mt-4 py-2" 
-                disabled={isLocked || (!uploadedResults && !projectInputs?.bridge_data?.bridge_name)}
+                disabled={isCalculating || (!uploadedResults && !projectInputs)}
                 style={{ 
                     backgroundColor: 'var(--app-primary-accent)', 
                     border: 'none', 
                     color: '#000', 
                     fontWeight: 'bold', 
-                    opacity: (isLocked || (!uploadedResults && !projectInputs?.bridge_data?.bridge_name)) ? 0.5 : 1 
+                    opacity: (isCalculating || (!uploadedResults && !projectInputs) ? 0.5 : 1)
                 }}
                 onClick={handleProceed}
             >
-                Proceed with Calculation ▸
+                {calculationPhase === 'loading'
+                    ? 'Preparing calculation engine...'
+                    : calculationPhase === 'calculating'
+                        ? 'Calculating...'
+                        : 'Proceed with Calculation ▸'}
             </Button>
+
+            <div className="mt-4"><AiCueSlot label="Ask the AI assistant about this project" /></div>
         </div>
     );
 
     const renderResults = () => {
         if (!computedData) return null;
 
-        const { stagewise, pillar_totals } = computedData;
-        const totalLcc = Object.values(stagewise).reduce((a, b) => a + b, 0);
-        const initialCost = stagewise.initial;
-        const futureCost = stagewise.use_reconstruction + (stagewise.end_of_life || 0);
-
-        const formatValue = (val) => new Intl.NumberFormat('en-IN').format(Math.round(val));
-
-        const summaryCards = [
-            { title: "TOTAL LIFE CYCLE COST (YEAR)", value: formatValue(totalLcc), subtitle: "INR", desc: "A Comprehensive Analysis of Total Life-Cycle Expenditures evaluated at the assessment year." },
-            { title: "INITIAL COST", value: formatValue(initialCost), subtitle: "INR", desc: "Cumulative total of construction, economic, social, and environmental costs incurred during the initial phase." },
-            { title: "FUTURE COST", value: formatValue(futureCost), subtitle: "INR", desc: "Cumulative cost expected for maintenance, repairs, replacement and demolition." }
-        ];
-
-        const pieData = [
-            { name: 'Economic', value: pillar_totals.eco, color: PILLAR_COLORS.economic },
-            { name: 'Environmental', value: pillar_totals.env, color: PILLAR_COLORS.environmental },
-            { name: 'Social', value: pillar_totals.social, color: PILLAR_COLORS.social }
-        ];
-
-        const barData = [
-            { name: 'Initial', value: stagewise.initial, color: STAGE_COLORS.initial_stage },
-            { name: 'Use & Recon', value: stagewise.use_reconstruction, color: STAGE_COLORS.use_stage },
-            { name: 'End-of-Life', value: stagewise.end_of_life || 0, color: STAGE_COLORS.end_of_life }
-        ];
+        const analysisPeriodYears = parseInt(projectData?.bridge_data?.analysis_period) || 0;
+        const yearOfConstruction = parseInt(projectData?.bridge_data?.year_of_construction) || 0;
+        const currency = projectData?.general_info?.project_currency || projectData?.currency || 'INR';
 
         return (
             <div ref={reportRef} ref-id="report-container" className="p-4" style={{ color: 'var(--app-text-primary)', position: 'relative', backgroundColor: 'var(--app-bg-main)' }}>
-                <div className="d-flex justify-content-between align-items-center mb-4">
-                    <h2 style={{ color: 'var(--app-primary-accent)' }}>Outputs</h2>
-                    <Button 
-                        variant="outline-primary" 
-                        onClick={handleDownloadReport} 
-                        disabled={isLocked || isGeneratingPdf}
-                        style={{ borderColor: 'var(--app-primary-accent)', color: 'var(--app-primary-accent)', opacity: (isLocked || isGeneratingPdf) ? 0.5 : 1 }}
-                    >
-                        {isGeneratingPdf ? (
-                            <><span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span> Generating...</>
-                        ) : (
-                            <><FaFileDownload className="me-2" /> Download Report</>
-                        )}
-                    </Button>
+                {/* Desktop layout: page title, then the report button under it */}
+                <h2 className="mb-3" style={{ color: 'var(--app-primary-accent)' }}>Results</h2>
+                <ReportActions
+                    onViewReport={() => navigate(`/project/${projectId}/report`)}
+                    onGenerateDesktopPdf={handleDownloadReport}
+                    isGeneratingPdf={isGeneratingPdf}
+                />
+
+                {isGeneratingPdf && reportProgress && (
+                    <div className="mb-4" data-testid="report-progress">
+                        <div className="d-flex justify-content-between mb-1" style={{ fontSize: '0.82rem', color: 'var(--app-text-secondary)' }}>
+                            <span>{reportProgress.message}</span>
+                            <span>{reportProgress.percent}%</span>
+                        </div>
+                        <ProgressBar
+                            now={reportProgress.percent}
+                            animated
+                            style={{ height: '6px', backgroundColor: 'var(--app-input-bg)' }}
+                        />
+                        <div className="mt-1" style={{ fontSize: '0.75rem', color: 'var(--app-text-secondary)' }}>
+                            First report on this device downloads the engine (~60 MB, cached afterwards) — later reports take seconds.
+                        </div>
+                    </div>
+                )}
+
+                <div
+                    className="mb-3"
+                    style={{ fontSize: '0.82rem', color: 'var(--app-text-secondary)' }}
+                    data-testid="lcca-engine-provenance"
+                >
+                    Calculated with: {(engineMetadata.source || projectData?.outputs_data?.engine?.source) === 'browser'
+                        ? 'In-browser engine (3psLCCA-core via CDN)'
+                        : (engineMetadata.source || projectData?.outputs_data?.engine?.source) === 'backend'
+                            ? 'FastAPI backend'
+                            : 'previously saved results'}
+                    {engineMetadata.coreVersion && ` | Core ${engineMetadata.coreVersion}`}
+                    {engineMetadata.calculatedAt && ` | ${new Date(engineMetadata.calculatedAt).toLocaleString()}`}
                 </div>
 
-                <h4 className="mb-4" style={{ color: 'var(--app-text-primary)' }}>At a Glance</h4>
-                <Row className="mb-5">
-                    {summaryCards.map((card, idx) => (
-                        <Col key={idx} md={4}>
-                            <Card style={{ backgroundColor: 'var(--app-bg-card)', border: '1px solid var(--app-border-light)', height: '100%' }}>
-                                <Card.Body>
-                                    <div className="text-muted text-uppercase mb-2" style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '1px' }}>{card.title}</div>
-                                    <div className="d-flex align-items-baseline gap-2 mb-2">
-                                        <span style={{ fontSize: '0.75rem', color: 'var(--app-text-muted)' }}>{card.subtitle}</span>
-                                        <h3 className="mb-0" style={{ color: 'var(--app-primary-accent)', fontWeight: '700' }}>{card.value}</h3>
-                                    </div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--app-text-secondary)', lineHeight: '1.5' }}>{card.desc}</div>
-                                </Card.Body>
-                            </Card>
-                        </Col>
-                    ))}
-                </Row>
+                <div className="mb-4"><AiCueSlot /></div>
 
-                <h4 className="mb-3" style={{ color: 'var(--app-text-primary)' }}>Life cycle cost distribution</h4>
-                <p className="mb-4" style={{ fontSize: '0.9rem', color: 'var(--app-text-secondary)', lineHeight: '1.6' }}>
-                    These charts illustrate the distribution of project costs. The Sustainability Matrix disaggregates costs across the Economic, Environmental, and Social Pillars. 
-                    The aggregation chart compares the relative weight of three lifecycle phases: Initial Construction, the combined Use/Maintenance/Reconstruction stage, and the final End-of-Life phase.
-                </p>
+                <ResultsView
+                    results={resultsToUse}
+                    currency={currency}
+                    analysisPeriod={analysisPeriodYears}
+                    yearOfConstruction={yearOfConstruction}
+                    pieChartRef={pieChartRef}
+                    barChartRef={barChartRef}
+                />
 
-                <Row className="mb-5">
-                    <Col md={6}>
-                        <Card style={{ backgroundColor: 'var(--app-bg-card)', border: '1px solid var(--app-border-light)', padding: '20px' }}>
-                            <h5 className="text-center mb-4" style={{ color: 'var(--app-text-primary)' }}>Sustainability Matrix</h5>
-                            <div ref={pieChartRef} style={{ height: '300px' }}>
-                                <D3PieChart data={pieData} />
-                            </div>
-                        </Card>
-                    </Col>
-                    <Col md={6}>
-                        <Card style={{ backgroundColor: 'var(--app-bg-card)', border: '1px solid var(--app-border-light)', padding: '20px' }}>
-                            <h5 className="text-center mb-4" style={{ color: 'var(--app-text-primary)' }}>Lifecycle Disaggregation</h5>
-                            <div ref={barChartRef} style={{ height: '300px' }}>
-                                <D3BarChart data={barData} />
-                            </div>
-                        </Card>
-                    </Col>
-                </Row>
-
-                <h4 className="mb-3" style={{ color: 'var(--app-text-primary)' }}>Consolidated stage summary</h4>
-                <p className="mb-4" style={{ fontSize: '0.9rem', color: 'var(--app-text-secondary)', lineHeight: '1.6' }}>
-                    A consolidated presentation of costs across the three pillars (economic, social, and environmental) for each lifecycle stage.
-                    This table facilitates the identification of phases that bear the most substantial burden.
-                </p>
-                
-                <Table responsive className="custom-output-table mb-5" style={{ color: 'var(--app-text-primary)', borderCollapse: 'separate', borderSpacing: '0 4px' }}>
-                    <thead>
-                        <tr style={{ color: 'var(--app-text-muted)', fontSize: '0.8rem', textTransform: 'uppercase' }}>
-                            <th style={{ border: 'none' }}>Stage</th>
-                            <th style={{ border: 'none' }}>Economic (M INR)</th>
-                            <th style={{ border: 'none' }}>Environmental (M INR)</th>
-                            <th style={{ border: 'none' }}>Social (M INR)</th>
-                            <th style={{ border: 'none' }}>Stage Total (M INR)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {STAGE_DEFS.map(([label, key, pillars]) => {
-                            const totals = computeStagePillarTotals(resultsToUse, key, pillars);
-                            if (!totals) return null;
-                            const stageTotal = Object.values(totals).reduce((a, b) => a + b, 0);
-                            return (
-                                <tr key={key} style={{ backgroundColor: 'var(--app-bg-card)', fontSize: '0.9rem' }}>
-                                    <td style={{ padding: '15px', border: 'none', fontWeight: '500' }}>{label}</td>
-                                    <td style={{ padding: '15px', border: 'none', color: 'var(--app-text-primary)' }}>{(totals.economic / 1e6).toFixed(2)}</td>
-                                    <td style={{ padding: '15px', border: 'none', color: 'var(--app-text-primary)' }}>{(totals.environmental / 1e6).toFixed(2)}</td>
-                                    <td style={{ padding: '15px', border: 'none', color: 'var(--app-text-primary)' }}>{(totals.social / 1e6).toFixed(2)}</td>
-                                    <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>{(stageTotal / 1e6).toFixed(2)}</td>
-                                </tr>
-                            );
-                        })}
-                        <tr style={{ backgroundColor: 'var(--app-bg-card)', fontSize: '0.9rem', borderTop: '2px solid var(--app-border-mid)' }}>
-                            <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>Grand Total</td>
-                            <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>{(pillar_totals.eco / 1e6).toFixed(2)}</td>
-                            <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>{(pillar_totals.env / 1e6).toFixed(2)}</td>
-                            <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>{(pillar_totals.social / 1e6).toFixed(2)}</td>
-                            <td className="fw-bold" style={{ padding: '15px', border: 'none' }}>{(totalLcc / 1e6).toFixed(2)}</td>
-                        </tr>
-                    </tbody>
-                </Table>
-
-                <h4 className="mb-4" style={{ color: 'var(--app-text-primary)' }}>Itemized detail</h4>
-                <Card style={{ backgroundColor: 'var(--app-bg-card)', border: '1px solid var(--app-border-light)' }}>
-                    <Card.Body>
-                        <Table responsive className="mb-0" style={{ color: 'var(--app-text-primary)' }}>
-                            <thead>
-                                <tr style={{ fontSize: '0.8rem', color: 'var(--app-text-muted)' }}>
-                                    <th>Stage</th>
-                                    <th>Cost Item</th>
-                                    <th className="text-end">Value (M INR)</th>
-                                    <th style={{ width: '40%' }}>Relative Cost</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {BREAKDOWN_STAGES.map((stage) => {
-                                    const stageData = resultsToUse[stage.resultKey];
-                                    if (!stageData) return null;
-                                    
-                                    return stage.rows.map((row, rowIdx) => {
-                                        const val = stageData[row.pillar]?.[row.key] || 0;
-                                        if (val === 0) return null;
-                                        
-                                        const pct = (val / totalLcc) * 100;
-                                        
-                                        return (
-                                            <tr key={`${stage.resultKey}-${row.key}`}>
-                                                {rowIdx === 0 && (
-                                                    <td rowSpan={stage.rows.length} style={{ verticalAlign: 'middle', borderRight: '1px solid var(--app-border-light)', fontSize: '0.75rem', writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: 'var(--app-text-muted)', backgroundColor: 'var(--app-bg-main)' }}>
-                                                        {stage.label}
-                                                    </td>
-                                                )}
-                                                <td style={{ padding: '15px' }}>{row.label}</td>
-                                                <td className="text-end fw-bold" style={{ padding: '15px' }}>{(val / 1e6).toFixed(2)}</td>
-                                                <td style={{ padding: '15px' }}>
-                                                    <div style={{ height: '10px', width: `${Math.min(100, pct * 2)}%`, backgroundColor: PILLAR_COLORS[row.pillar], borderRadius: '2px' }}></div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    });
-                                })}
-                            </tbody>
-                        </Table>
-                    </Card.Body>
-                </Card>
-
-                <Button 
-                    variant="outline-secondary" 
-                    className="mt-4" 
-                    disabled={isLocked}
+                <Button
+                    variant="outline-secondary"
+                    className="mt-4"
                     style={{ color: 'var(--app-text-secondary)', borderColor: 'var(--app-border-mid)' }}
                     onClick={() => setView('validation')}
                 >
@@ -739,38 +482,7 @@ const Outputs = ({ addLog, isLocked, navTrigger }) => {
         <div style={{ minHeight: '100%', backgroundColor: 'var(--app-bg-main)', position: 'relative' }}>
             <style>{`
                 .custom-output-table td { border-bottom: 1px solid var(--app-border-light) !important; }
-                .lock-overlay {
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    bottom: 0;
-                    background-color: rgba(0,0,0,0.05);
-                    z-index: 10;
-                    cursor: not-allowed;
-                    display: flex;
-                    justify-content: center;
-                    align-items: flex-start;
-                    padding-top: 100px;
-                }
             `}</style>
-            {isLocked && (
-                <div className="lock-overlay">
-                    <div className="d-flex align-items-center" style={{ 
-                        backgroundColor: 'var(--app-bg-card)', 
-                        border: '2px solid var(--app-primary-accent)', 
-                        color: 'var(--app-primary-accent)', 
-                        padding: '12px 24px', 
-                        borderRadius: '8px',
-                        fontWeight: 'bold',
-                        fontSize: '1rem',
-                        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                        gap: '10px'
-                    }}>
-                        <FaExclamationTriangle /> PROJECT LOCKED - READ ONLY MODE
-                    </div>
-                </div>
-            )}
             {view === 'validation' ? renderValidation() : renderResults()}
             
             <ReportSectionModal 

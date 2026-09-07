@@ -1,52 +1,51 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
+import { Modal, Button, Form } from 'react-bootstrap';
+import { COUNTRIES, CURRENCIES } from './utils/countriesdata';
+import { materialCatalog } from './utils/materialCatalog';
+
+const UNIT_SYSTEM_OPTIONS = ['Metric (SI)', 'Imperial (US)'];
 
 const NewProjectModal = ({ show, onHide, onCreate }) => {
     const [projectName, setProjectName] = useState('');
     const [country, setCountry] = useState('');
     const [currency, setCurrency] = useState('');
     const [unitSystem, setUnitSystem] = useState('Metric (SI)');
+    const [sorDatabase, setSorDatabase] = useState('');
+    const [validated, setValidated] = useState(false);
 
-    // Reset fields when modal opens
     useEffect(() => {
         if (show) {
             setProjectName('');
             setCountry('');
             setCurrency('');
             setUnitSystem('Metric (SI)');
+            setSorDatabase('');
+            setValidated(false);
         }
     }, [show]);
 
-    const handleCountryChange = (e) => {
-        const val = e.target.value;
-        setCountry(val);
-        // Auto-fill currency based on country (Simple mapping for demo)
-        if (val === 'India') setCurrency('Indian Rupee (INR)');
-        else if (val === 'USA') setCurrency('US Dollar (USD)');
-        else if (val === 'UK') setCurrency('British Pound (GBP)');
-        else setCurrency('');
-    };
-
     const handleCreate = () => {
-        if (!projectName || !country || !currency) {
-            alert('Please fill in all required fields.');
+        setValidated(true);
+        if (!projectName.trim() || !country || !currency || !unitSystem) {
             return;
         }
         onCreate({
-            name: projectName,
+            name: projectName.trim(),
             country,
             currency,
             unitSystem,
+            sorDatabase,
             createdAt: new Date().toLocaleString()
         });
         onHide();
     };
 
     return (
-        <Modal 
-            show={show} 
-            onHide={onHide} 
-            centered 
+        <Modal
+            show={show}
+            onHide={onHide}
+            centered
             contentClassName="new-project-modal"
             style={{ fontFamily: '"Segoe UI", sans-serif' }}
         >
@@ -93,6 +92,11 @@ const NewProjectModal = ({ show, onHide, onCreate }) => {
                     color: var(--app-text-secondary);
                     margin-top: 0.4rem;
                 }
+                .new-project-modal .invalid-feedback-inline {
+                    font-size: 0.75rem;
+                    color: var(--app-danger, #dc3545);
+                    margin-top: 0.25rem;
+                }
                 .btn-create {
                     background-color: var(--app-primary-accent);
                     border: none;
@@ -128,54 +132,109 @@ const NewProjectModal = ({ show, onHide, onCreate }) => {
                 <Form>
                     <Form.Group className="mb-3">
                         <Form.Label>Project Name</Form.Label>
-                        <Form.Control 
-                            type="text" 
-                            placeholder="e.g. Highway 5 Bridge Replacement" 
+                        <Form.Control
+                            type="text"
+                            placeholder="e.g. Highway 5 Bridge Replacement"
                             value={projectName}
                             onChange={(e) => setProjectName(e.target.value)}
+                            isInvalid={validated && !projectName.trim()}
                         />
-                        <div className="help-text">You can rename this later.</div>
+                        {validated && !projectName.trim() ? (
+                            <div className="invalid-feedback-inline">Please enter a Project Name.</div>
+                        ) : (
+                            <div className="help-text">You can rename this later.</div>
+                        )}
                     </Form.Group>
 
                     <Form.Group className="mb-3">
                         <Form.Label>Country</Form.Label>
-                        <Form.Select value={country} onChange={handleCountryChange}>
-                            <option value="">- Select country -</option>
-                            <option value="India">India</option>
-                            <option value="USA">USA</option>
-                            <option value="UK">UK</option>
+                        <Form.Select
+                            value={country}
+                            onChange={(e) => setCountry(e.target.value)}
+                            isInvalid={validated && !country}
+                        >
+                            <option value="">— Select country —</option>
+                            {COUNTRIES.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                            ))}
                         </Form.Select>
-                        <div className="help-text">Cannot be changed after project creation.</div>
+                        {validated && !country ? (
+                            <div className="invalid-feedback-inline">Please select a Country.</div>
+                        ) : (
+                            <div className="help-text">Cannot be changed after project creation.</div>
+                        )}
                     </Form.Group>
 
                     <Form.Group className="mb-3">
                         <Form.Label>Currency</Form.Label>
-                        <Form.Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-                            <option value="">- Select currency -</option>
-                            <option value="Indian Rupee (INR)">Indian Rupee (INR)</option>
-                            <option value="US Dollar (USD)">US Dollar (USD)</option>
-                            <option value="British Pound (GBP)">British Pound (GBP)</option>
+                        <Form.Select
+                            value={currency}
+                            onChange={(e) => setCurrency(e.target.value)}
+                            isInvalid={validated && !currency}
+                        >
+                            <option value="">— Select currency —</option>
+                            {CURRENCIES.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                            ))}
                         </Form.Select>
-                        <div className="help-text">Auto-filled based on country.</div>
+                        {validated && !currency ? (
+                            <div className="invalid-feedback-inline">Please select a Currency.</div>
+                        ) : (
+                            <div className="help-text">Cannot be changed after project creation.</div>
+                        )}
+                    </Form.Group>
+
+                    <Form.Group className="mb-3">
+                        <Form.Label>Unit System</Form.Label>
+                        <Form.Select
+                            value={unitSystem}
+                            onChange={(e) => setUnitSystem(e.target.value)}
+                            isInvalid={validated && !unitSystem}
+                        >
+                            {UNIT_SYSTEM_OPTIONS.map((u) => (
+                                <option key={u} value={u}>{u}</option>
+                            ))}
+                        </Form.Select>
+                        {validated && !unitSystem ? (
+                            <div className="invalid-feedback-inline">Please select a Unit System.</div>
+                        ) : (
+                            <div className="help-text">Cannot be changed after project creation.</div>
+                        )}
                     </Form.Group>
 
                     <Form.Group className="mb-0">
-                        <Form.Label>Unit System</Form.Label>
-                        <Form.Select value={unitSystem} onChange={(e) => setUnitSystem(e.target.value)}>
-                            <option value="Metric (SI)">Metric (SI)</option>
-                            <option value="Imperial">Imperial</option>
+                        <Form.Label>Material Suggestions (SOR) — optional</Form.Label>
+                        <Form.Select
+                            value={sorDatabase}
+                            onChange={(e) => setSorDatabase(e.target.value)}
+                        >
+                            <option value="">— None (choose later) —</option>
+                            {Object.keys(materialCatalog).map((key) => (
+                                <option key={key} value={key}>{key}</option>
+                            ))}
                         </Form.Select>
-                        <div className="help-text">Cannot be changed after project creation.</div>
+                        <div className="help-text">
+                            Schedule of Rates database that auto-suggests material names,
+                            rates, and emission factors. Can be set or changed anytime in
+                            General Information.
+                        </div>
                     </Form.Group>
                 </Form>
             </Modal.Body>
-            <Modal.Footer className="gap-2">
+            <Modal.Footer className="gap-2 flex-column align-items-stretch">
+                {country && currency && (
+                    <div className="w-100 text-start" style={{ fontSize: '0.8rem', color: 'var(--app-text-secondary)' }} data-testid="new-project-summary">
+                        Creating a project in <b>{country}</b> using <b>{currency}</b>. Country and currency cannot be changed after creation.
+                    </div>
+                )}
+                <div className="d-flex justify-content-end gap-2 w-100">
                 <Button className="btn-create" onClick={handleCreate}>
-                    Create
+                    Create Project
                 </Button>
                 <Button className="btn-cancel" onClick={onHide}>
                     Cancel
                 </Button>
+            </div>
             </Modal.Footer>
         </Modal>
     );

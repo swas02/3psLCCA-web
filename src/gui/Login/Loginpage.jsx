@@ -1,13 +1,18 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useEffect } from 'react';
-import { Form, Button, Container, Row, Col, Modal } from 'react-bootstrap';
-import { BsStars } from 'react-icons/bs';
+import { Form, Button, Container, Row, Col, Modal, Alert, Spinner } from 'react-bootstrap';
+import { BsStars, BsGoogle } from 'react-icons/bs';
 import Logo3psLCCA from '../../assets/logo-3psLCCA.svg';
 
-const Loginpage = ({ onLogin, onGuestLogin }) => {
+const Loginpage = ({ onLogin, onGuestLogin, onGoogleLogin }) => {
+    const [isSignup, setIsSignup] = useState(false);
+    const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [rememberMe, setRememberMe] = useState(false);
     const [validated, setValidated] = useState(false);
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
 
     // Guest Prompt State
     const [showGuestPrompt, setShowGuestPrompt] = useState(false);
@@ -41,12 +46,28 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
         };
     }, []);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setValidated(true);
-        if (!email || !password) return;
+        setError('');
+        
+        if (!email || !password || (isSignup && !name)) return;
 
-        if (onLogin) onLogin({ email, password });
+        setLoading(true);
+        try {
+            if (onLogin) {
+                await onLogin({ 
+                    email, 
+                    password, 
+                    name: isSignup ? name : undefined, 
+                    action: isSignup ? 'signup' : 'login' 
+                });
+            }
+        } catch (err) {
+            setError(err.message || 'An error occurred during authentication.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleGuestSubmit = (e) => {
@@ -57,8 +78,9 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
     };
 
     return (
-        <Container fluid className="p-0 m-0" style={{ height: '100vh', overflow: 'hidden' }}>
+        <Container fluid className="p-0 m-0 min-vh-100 d-flex flex-column">
             <style>{`
+
                 @keyframes logo-fly-in {
                     0% {
                         opacity: 0;
@@ -125,8 +147,6 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
 
                 .logo-bg-glow {
                     position: absolute;
-                    width: 160px;
-                    height: 160px;
                     border-radius: 50%;
                     background: radial-gradient(circle, rgba(115, 165, 175, 0.15) 0%, rgba(115, 165, 175, 0) 70%);
                     z-index: -1;
@@ -141,30 +161,30 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
                     font-weight: 200;
                 }
             `}</style>
-            <Row className="g-0 m-0 w-100 h-100" style={{ backgroundColor: 'var(--app-bg-main)', transition: 'background-color 0.3s ease' }}>
+            <Row className="g-0 m-0 w-100 flex-grow-1" style={{ backgroundColor: 'var(--app-bg-main)', transition: 'background-color 0.3s ease' }}>
 
                 {/* Left Side: Minimal Background */}
-                <Col md={6} className="d-flex flex-column p-4">
+                <Col md={6} className="d-flex flex-column p-3 p-md-4 pb-5 pb-md-4">
 
                     {/* Top Logo */}
-                    <div className="d-flex align-items-center mb-4" style={{ fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--app-logo-accent)' }}>
-                        <BsStars className="me-2" /> 3psLCCA
+                    <div className="d-flex align-items-center mb-4" style={{ fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--app-text-primary)' }}>
+                        <img src={Logo3psLCCA} alt="3psLCCA Logo" width="24" height="24" className="me-2" style={{ objectFit: 'contain' }} /> 3psLCCA
                     </div>
 
                     {/* Middle Text */}
                     <div className="d-flex flex-column justify-content-center align-items-center text-center flex-grow-1" style={{ paddingBottom: '5vh' }}>
                         <div className="premium-logo-container mb-4 d-flex justify-content-center align-items-center">
-                            <div className="logo-bg-glow"></div>
+                            <div className="logo-bg-glow" style={{ width: 'clamp(110px, 18vw, 160px)', height: 'clamp(110px, 18vw, 160px)' }}></div>
                             <div className="premium-logo-floater">
                                 <img
                                     src={Logo3psLCCA}
                                     alt="3psLCCA Logo"
                                     className="premium-logo-rotator"
-                                    style={{ width: '130px', height: '130px', filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.15))' }}
+                                    style={{ width: 'clamp(90px, 15vw, 130px)', height: 'clamp(90px, 15vw, 130px)', filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.15))' }}
                                 />
                             </div>
                         </div>
-                        <h1 className="fw-bold mb-2" style={{ fontSize: '2.8rem', letterSpacing: '-0.5px', color: 'var(--app-text-primary)', transition: 'color 0.3s ease', minHeight: '3.6rem' }}>
+                        <h1 className="fw-bold mb-2" style={{ fontSize: 'clamp(1.8rem, 4vw, 2.8rem)', letterSpacing: '-0.5px', color: 'var(--app-text-primary)', transition: 'color 0.3s ease', minHeight: 'clamp(2.4rem, 5vw, 3.6rem)' }}>
                             {welcomeText}
                             <span className="typewriter-cursor">|</span>
                         </h1>
@@ -176,20 +196,36 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
                 </Col>
 
                 {/* Right Side: Form Container */}
-                <Col md={6} className="d-flex flex-column justify-content-center p-3 p-md-4 border-start" style={{ backgroundColor: 'var(--app-bg-card)', borderColor: 'var(--app-border-light)', transition: 'background-color 0.3s ease, border-color 0.3s ease', overflowY: 'auto' }}>
+                <Col md={6} className="d-flex flex-column justify-content-center p-3 p-md-4 border-start" style={{ backgroundColor: 'var(--app-bg-card)', borderColor: 'var(--app-border-light)', transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
                     <div className="w-100 mx-auto p-3 p-md-4 rounded shadow border" style={{ maxWidth: '520px', backgroundColor: 'var(--app-bg-card)', borderColor: 'var(--app-border-light)', transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
 
                         <div className="mb-3 text-center">
-                            <h1 className="fw-bold mb-1" style={{ color: 'var(--app-text-primary)', fontSize: '2rem', transition: 'color 0.3s ease' }}>Login</h1>
+                            <h1 className="fw-bold mb-1" style={{ color: 'var(--app-text-primary)', fontSize: '2rem', transition: 'color 0.3s ease' }}>{isSignup ? 'Signup' : 'Login'}</h1>
                             <p className="mb-0" style={{ fontSize: '0.85rem', lineHeight: '1.3', color: 'var(--app-text-secondary)', transition: 'color 0.3s ease' }}>
-                                Welcome! Login to manage your projects, resources, and access comprehensive analysis tools.
+                                {isSignup ? 'Create a new account to manage your projects.' : 'Welcome! Login to manage your projects, resources, and access comprehensive analysis tools.'}
                             </p>
                         </div>
 
                         <div className="mx-auto" style={{ maxWidth: '380px' }}>
+                            {error && <Alert variant="danger" className="py-2" style={{ fontSize: '0.85rem' }}>{error}</Alert>}
                             <Form onSubmit={handleSubmit} noValidate>
+                                {isSignup && (
+                                    <Form.Group className="mb-2">
+                                        <Form.Label className="fw-bold mb-1" style={{ fontSize: '0.75rem', color: 'var(--app-text-secondary)', transition: 'color 0.3s ease' }}>NAME</Form.Label>
+                                        <Form.Control
+                                            type="text"
+                                            value={name}
+                                            onChange={(e) => setName(e.target.value)}
+                                            style={{ fontSize: '0.85rem', padding: '0.35rem 0.6rem', borderRadius: '4px', backgroundColor: 'var(--app-input-bg)', color: 'var(--app-input-text)', borderColor: 'var(--app-input-border)', transition: 'all 0.3s ease' }}
+                                            isInvalid={validated && !name}
+                                        />
+                                        <Form.Control.Feedback type="invalid" style={{ fontSize: '0.7rem' }}>
+                                            Name is required for signup.
+                                        </Form.Control.Feedback>
+                                    </Form.Group>
+                                )}
                                 <Form.Group className="mb-2">
-                                    <Form.Label className="fw-bold mb-1" style={{ fontSize: '0.75rem', color: 'var(--app-text-secondary)', transition: 'color 0.3s ease' }}>USER NAME</Form.Label>
+                                    <Form.Label className="fw-bold mb-1" style={{ fontSize: '0.75rem', color: 'var(--app-text-secondary)', transition: 'color 0.3s ease' }}>EMAIL</Form.Label>
                                     <Form.Control
                                         type="email"
                                         value={email}
@@ -198,7 +234,7 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
                                         isInvalid={validated && !email}
                                     />
                                     <Form.Control.Feedback type="invalid" style={{ fontSize: '0.7rem' }}>
-                                        User Name (Email) is required.
+                                        Email is required.
                                     </Form.Control.Feedback>
                                 </Form.Group>
 
@@ -229,20 +265,45 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
 
                                 <Button
                                     type="submit"
-                                    className="w-100 py-2 fw-bold mb-3 border-0"
+                                    disabled={loading}
+                                    className="w-100 py-2 fw-bold mb-3 border-0 d-flex justify-content-center align-items-center"
                                     style={{ backgroundColor: 'var(--app-primary-accent)', color: 'var(--app-bg-main)', fontSize: '0.9rem', letterSpacing: '0.5px', borderRadius: '4px' }}
                                 >
-                                    LOGIN
+                                    {loading ? <Spinner animation="border" size="sm" /> : (isSignup ? 'SIGNUP' : 'LOGIN')}
+                                </Button>
+                                
+                                <div className="d-flex align-items-center mb-3">
+                                    <hr className="flex-grow-1" style={{ borderColor: 'var(--app-border-light)' }} />
+                                    <span className="px-2 text-muted" style={{ fontSize: '0.8rem' }}>OR</span>
+                                    <hr className="flex-grow-1" style={{ borderColor: 'var(--app-border-light)' }} />
+                                </div>
+                                
+                                <Button
+                                    variant="light"
+                                    onClick={onGoogleLogin}
+                                    className="w-100 py-2 fw-bold mb-3 d-flex justify-content-center align-items-center gap-2"
+                                    style={{ backgroundColor: '#ffffff', color: '#757575', border: '1px solid #ddd', fontSize: '0.9rem', borderRadius: '4px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
+                                >
+                                    <BsGoogle style={{ color: '#DB4437', fontSize: '1.1rem' }} />
+                                    Continue with Google
                                 </Button>
                             </Form>
 
                             <div className="d-flex justify-content-between align-items-center mt-2" style={{ fontSize: '0.8rem' }}>
                                 <span style={{ color: 'var(--app-text-secondary)', transition: 'color 0.3s ease' }}>
-                                    New User? <span style={{ color: 'var(--app-primary-accent)', fontWeight: 'bold', cursor: 'pointer', textDecoration: 'none', transition: 'color 0.3s ease' }}>Signup</span>
+                                    {isSignup ? 'Already have an account? ' : 'New User? '}
+                                    <span 
+                                        onClick={() => { setIsSignup(!isSignup); setError(''); setValidated(false); }}
+                                        style={{ color: 'var(--app-primary-accent)', fontWeight: 'bold', cursor: 'pointer', textDecoration: 'none', transition: 'color 0.3s ease' }}
+                                    >
+                                        {isSignup ? 'Login' : 'Signup'}
+                                    </span>
                                 </span>
-                                <span style={{ color: 'var(--app-text-secondary)', cursor: 'pointer', fontStyle: 'italic', transition: 'color 0.3s ease' }}>
-                                    Forgot your password?
-                                </span>
+                                {!isSignup && (
+                                    <span style={{ color: 'var(--app-text-secondary)', cursor: 'pointer', fontStyle: 'italic', transition: 'color 0.3s ease' }}>
+                                        Forgot your password?
+                                    </span>
+                                )}
                             </div>
                         </div>
 

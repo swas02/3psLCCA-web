@@ -1,10 +1,11 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useCallback, useEffect } from 'react';
 import { useProjectData } from '../../../contexts/ProjectDataContext';
+import { normalizeDemolitionData, validateDemolitionData } from '../../../utils/projectPageSchema';
 import '../financialdata/FinancialData.css';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const BASE_DOCS_URL = 'https://yourdocs.com/demolition/';
 
 const DEMOLITION_SECTIONS = [
     {
@@ -13,7 +14,7 @@ const DEMOLITION_SECTIONS = [
             {
                 key: 'demolition_cost',
                 label: 'Demolition & Disposal Cost (%)',
-                hint: 'Cost of demolition cost expressed as percentage of initial construction cost.',
+                hint: 'Demolition and disposal cost expressed as a percentage of initial construction cost.',
                 type: 'float',
                 min: 0.0,
                 max: 100.0,
@@ -87,22 +88,10 @@ function SectionHeader({ title }) {
     );
 }
 
-function FieldHint({ text, docSlug }) {
+function FieldHint({ text }) {
     return (
         <div style={{ fontSize: '0.8rem', color: 'var(--app-text-muted)', marginBottom: '8px' }}>
             {text}
-            {docSlug && (
-                <a
-                    href={`${BASE_DOCS_URL}${docSlug}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-decoration-none ms-1"
-                    style={{ color: 'var(--app-primary-accent)', fontSize: '0.75rem' }}
-                    title="View documentation"
-                >
-                    ⓘ
-                </a>
-            )}
         </div>
     );
 }
@@ -158,15 +147,32 @@ const Demolition = ({ controller, engine }) => {
     const { projectData, updateProjectData } = useProjectData();
     const [form, setForm] = useState(() => {
         const saved = projectData.demolition_data;
-        return (saved && Object.keys(saved).length > 0) ? saved : INITIAL_STATE;
+        return normalizeDemolitionData((saved && Object.keys(saved).length > 0) ? { ...INITIAL_STATE, ...saved } : INITIAL_STATE);
     });
 
     useEffect(() => {
-        updateProjectData('demolition_data', form);
+        const next = normalizeDemolitionData({ ...INITIAL_STATE, ...(projectData.demolition_data || {}) });
+        setForm(prev => JSON.stringify(next) !== JSON.stringify(prev) ? next : prev);
+    }, [projectData.demolition_data]);
+
+    useEffect(() => {
+        updateProjectData('demolition_data', {
+            ...form,
+            demolition_cost_pct: parseFloat(form.demolition_cost) || 0,
+            demolition_carbon_cost_pct: parseFloat(form.demolition_carbon_cost) || 0,
+        });
     }, [form, updateProjectData]);
 
     const [errors, setErrors] = useState(new Set());
     const [validationMsg, setValidationMsg] = useState('');
+    const [statusMsg, setStatusMsg] = useState('');
+
+    // Auto-dismiss the transient status line
+    useEffect(() => {
+        if (!statusMsg) return undefined;
+        const timer = setTimeout(() => setStatusMsg(''), 3000);
+        return () => clearTimeout(timer);
+    }, [statusMsg]);
 
     // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -189,6 +195,7 @@ const Demolition = ({ controller, engine }) => {
         }));
         setErrors(new Set());
         setValidationMsg('');
+        setStatusMsg('Suggested values applied');
         if (engine && engine._log) {
             engine._log('Demolition: Suggested values applied.');
         } else if (controller && controller.engine) {
@@ -197,9 +204,11 @@ const Demolition = ({ controller, engine }) => {
     };
 
     const handleClearAll = () => {
+        if (!window.confirm('Clear all demolition inputs? This cannot be undone.')) return;
         setForm(INITIAL_STATE);
         setErrors(new Set());
         setValidationMsg('');
+        setStatusMsg('');
         if (engine && engine._log) {
             engine._log('Demolition: All fields cleared.');
         } else if (controller && controller.engine) {
@@ -210,27 +219,19 @@ const Demolition = ({ controller, engine }) => {
     // ── Validation ────────────────────────────────────────────────────────────
 
     const validate = () => {
+        const messages = validateDemolitionData(form);
         const newErrors = new Set();
-        const missing = [];
-
         REQUIRED_KEYS.forEach((key) => {
-            const val = form[key];
-            const isEmpty = val === '' || val === null || val === undefined;
-            const isZero = !isEmpty && Number(val) < 0; // Cost can be 0 sometimes? Wait, usually we require > 0 but lets just check if empty
-            if (isEmpty || isZero) {
-                newErrors.add(key);
-                const field = ALL_FIELDS.find((f) => f.key === key);
-                missing.push(field?.label ?? key);
-            }
+            if (messages.some((message) => message.includes(key.replace(/_/g, ' ')))) newErrors.add(key);
         });
 
         setErrors(newErrors);
         if (newErrors.size > 0) {
-            const msg = `Missing required demolition data: ${missing.join(', ')}`;
+            const msg = `Demolition data needs attention: ${messages.join(' ')}`;
             setValidationMsg(msg);
             if (engine && engine._log) engine._log(msg);
             else if (controller && controller.engine) controller.engine._log(msg);
-            return { valid: false, errors: missing };
+            return { valid: false, errors: messages };
         }
 
         setValidationMsg('');
@@ -280,6 +281,12 @@ const Demolition = ({ controller, engine }) => {
                     Clear All
                 </button>
             </div>
+
+            {statusMsg && (
+                <div className="mb-3" style={{ fontSize: '0.85rem', color: 'var(--app-primary-accent)' }} role="status" aria-live="polite">
+                    ✓ {statusMsg}
+                </div>
+            )}
 
             {/* Validation message */}
             {validationMsg && (

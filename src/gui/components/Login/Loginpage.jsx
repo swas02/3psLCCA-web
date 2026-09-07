@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useEffect } from 'react';
 import { Form, Button, Container, Row, Col, Modal } from 'react-bootstrap';
 import { BsStars } from 'react-icons/bs';
@@ -147,8 +148,8 @@ const Loginpage = ({ onLogin, onGuestLogin }) => {
                 <Col md={6} className="d-flex flex-column p-4">
 
                     {/* Top Logo */}
-                    <div className="d-flex align-items-center mb-4" style={{ fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--app-logo-accent)' }}>
-                        <BsStars className="me-2" /> 3psLCCA
+                    <div className="d-flex align-items-center mb-4" style={{ fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--app-text-primary)' }}>
+                        <img src={Logo3psLCCA} alt="3psLCCA Logo" width="24" height="24" className="me-2" style={{ objectFit: 'contain' }} /> 3psLCCA
                     </div>
 
                     {/* Middle Text */}
